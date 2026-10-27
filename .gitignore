@@ -1,0 +1,21 @@
+# Build and release outputs
+/dist/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Signing material and local secrets
+*.pfx
+*.p12
+*.pvk
+*.key
+*.pem
+.env
+.env.*
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

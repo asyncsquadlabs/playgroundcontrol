@@ -1,0 +1,2462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#102a43">
+<title>Playground Control - Windows acceptance test guide</title>
+<style>
+  :root {
+    color-scheme: light;
+    --navy: #102a43;
+    --navy-deep: #081b2c;
+    --teal: #0c6478;
+    --teal-bright: #2da5b8;
+    --mint: #dff3ef;
+    --blue-soft: #dcecf4;
+    --paper: #f5f2ea;
+    --surface: #fffdf8;
+    --surface-2: #eef4f3;
+    --ink: #152a38;
+    --muted: #60727d;
+    --line: #cdd9dc;
+    --line-strong: #aebfc5;
+    --danger: #a83838;
+    --danger-soft: #f8e5e1;
+    --warning: #825d10;
+    --warning-soft: #fff1cc;
+    --success: #21694b;
+    --success-soft: #dff1e7;
+    --code: #0d2231;
+    --code-ink: #dce9e9;
+    --shadow: 0 20px 55px rgba(16, 42, 67, 0.10);
+    --shadow-small: 0 8px 24px rgba(16, 42, 67, 0.08);
+    --radius: 18px;
+    --radius-small: 11px;
+    --max: 1440px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 88px;
+  }
+
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 8% 5%, rgba(45, 165, 184, 0.10), transparent 28rem),
+      linear-gradient(180deg, #faf8f2 0%, var(--paper) 100%);
+    font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.55;
+  }
+
+  a { color: var(--teal); }
+  button, input, textarea { font: inherit; }
+  button { cursor: pointer; }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  input[type="checkbox"]:focus-visible + .checkbox-ui {
+    outline: 3px solid rgba(45, 165, 184, 0.48);
+    outline-offset: 3px;
+  }
+
+  .skip-link {
+    position: fixed;
+    top: -100px;
+    left: 16px;
+    z-index: 100;
+    padding: 10px 14px;
+    border-radius: 8px;
+    color: #fff;
+    background: var(--navy);
+  }
+  .skip-link:focus { top: 12px; }
+
+  .hero {
+    position: relative;
+    overflow: hidden;
+    color: #f7fbfb;
+    background:
+      radial-gradient(circle at 85% 15%, rgba(45, 165, 184, 0.34), transparent 26rem),
+      radial-gradient(circle at 16% 105%, rgba(101, 188, 174, 0.20), transparent 24rem),
+      linear-gradient(125deg, var(--navy-deep), #123c54 58%, #0e5865);
+  }
+
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.20;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+    background-size: 38px 38px;
+    mask-image: linear-gradient(to bottom, #000, transparent 92%);
+    pointer-events: none;
+  }
+
+  .hero::after {
+    content: "";
+    position: absolute;
+    width: 420px;
+    height: 420px;
+    right: -140px;
+    bottom: -270px;
+    border: 1px solid rgba(255,255,255,0.17);
+    border-radius: 42%;
+    transform: rotate(18deg);
+    pointer-events: none;
+  }
+
+  .hero-inner {
+    position: relative;
+    z-index: 1;
+    width: min(var(--max), calc(100% - 40px));
+    margin: 0 auto;
+    padding: 30px 0 38px;
+  }
+
+  .brand-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 11px;
+    margin-bottom: 34px;
+  }
+
+  .brand-mark {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(255,255,255,0.24);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.12);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18);
+  }
+  .brand-mark svg { width: 24px; height: 24px; }
+
+  .brand-name {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .release-chip,
+  .mini-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 1px solid rgba(255,255,255,0.20);
+    border-radius: 999px;
+    color: rgba(255,255,255,0.86);
+    background: rgba(255,255,255,0.08);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.7fr);
+    gap: clamp(28px, 5vw, 78px);
+    align-items: end;
+  }
+
+  .kicker {
+    margin: 0 0 10px;
+    color: #9edfe4;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .hero h1 {
+    max-width: 860px;
+    margin: 0;
+    font-size: clamp(2.35rem, 5.5vw, 4.6rem);
+    line-height: 1.03;
+    letter-spacing: -0.045em;
+  }
+
+  .hero h1 span { color: #85d7d7; }
+
+  .lede {
+    max-width: 760px;
+    margin: 22px 0 0;
+    color: #c4d9de;
+    font-size: clamp(1rem, 1.7vw, 1.16rem);
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 27px;
+  }
+
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 9px 15px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-weight: 750;
+    text-decoration: none;
+    transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
+  .button:hover { transform: translateY(-1px); }
+  .button.primary {
+    color: #062d38;
+    background: #a5ece5;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.17);
+  }
+  .button.primary:hover { background: #c0f7f0; }
+  .button.ghost {
+    color: #e4f2f4;
+    border-color: rgba(255,255,255,0.23);
+    background: rgba(255,255,255,0.07);
+  }
+  .button.ghost:hover { background: rgba(255,255,255,0.13); }
+  .button.small {
+    min-height: 33px;
+    padding: 5px 10px;
+    color: var(--teal);
+    border-color: var(--line);
+    background: var(--surface);
+    font-size: 0.78rem;
+  }
+
+  .hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin-top: 28px;
+    color: #a9c4cb;
+    font-size: 0.8rem;
+  }
+  .hero-meta span::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: #6ed1cb;
+    vertical-align: 1px;
+  }
+
+  .artifact-card {
+    position: relative;
+    padding: 21px;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: var(--radius);
+    background: rgba(4, 26, 40, 0.48);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.22);
+    backdrop-filter: blur(10px);
+  }
+
+  .artifact-card::before {
+    content: "";
+    position: absolute;
+    top: 17px;
+    right: 17px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e4b95d;
+    box-shadow: 0 0 0 5px rgba(228,185,93,0.10);
+  }
+
+  .artifact-label {
+    margin: 0 0 6px;
+    color: #8fb7c1;
+    font-size: 0.70rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .artifact-name {
+    margin: 0;
+    color: #fff;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 1.06rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .artifact-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 14px;
+    margin: 17px 0 0;
+    padding-top: 15px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    color: #b7d0d5;
+    font-size: 0.79rem;
+  }
+  .artifact-meta dt { color: #7fa5af; }
+  .artifact-meta dd { margin: 0; overflow-wrap: anywhere; }
+
+  .hash-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 15px;
+  }
+  .hash {
+    flex: 1;
+    margin: 0;
+    padding: 9px 10px;
+    border-radius: 8px;
+    color: #beece5;
+    background: rgba(0,0,0,0.22);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .icon-button {
+    display: inline-grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    color: #d8ebee;
+    background: rgba(255,255,255,0.08);
+  }
+  .icon-button:hover { background: rgba(255,255,255,0.15); }
+  .icon-button svg { width: 16px; height: 16px; }
+
+  .artifact-warning {
+    margin: 15px 0 0;
+    color: #dbc181;
+    font-size: 0.76rem;
+  }
+
+  .top-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-bottom: 1px solid rgba(174, 191, 197, 0.7);
+    background: rgba(250, 248, 242, 0.91);
+    backdrop-filter: blur(14px);
+  }
+
+  .top-nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: min(var(--max), calc(100% - 40px));
+    margin: 0 auto;
+    min-height: 58px;
+  }
+
+  .top-nav-links {
+    display: flex;
+    gap: 1.1rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .top-nav-links::-webkit-scrollbar { display: none; }
+  .top-nav a {
+    position: relative;
+    flex: 0 0 auto;
+    padding: 17px 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 750;
+    text-decoration: none;
+  }
+  .top-nav a:hover,
+  .top-nav a.active { color: var(--teal); }
+  .top-nav a.active::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 9px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--teal-bright);
+  }
+
+  .nav-progress {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  .mini-bar {
+    width: 78px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 99px;
+    background: #d8e2e4;
+  }
+  .mini-bar span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--teal), var(--teal-bright));
+    transition: width 220ms ease;
+  }
+
+  .page {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr);
+    gap: 34px;
+    width: min(var(--max), calc(100% - 40px));
+    margin: 28px auto 64px;
+    align-items: start;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 86px;
+    display: grid;
+    gap: 14px;
+  }
+
+  .progress-card,
+  .side-nav {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: rgba(255, 253, 248, 0.86);
+    box-shadow: var(--shadow-small);
+  }
+
+  .progress-card { padding: 18px; }
+
+  .progress-top {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .progress-label {
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .progress-number {
+    color: var(--navy);
+    font-size: 1.55rem;
+    font-weight: 850;
+    line-height: 1;
+  }
+  .progress-number small {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 650;
+  }
+  .progress-track {
+    height: 9px;
+    margin-top: 13px;
+    overflow: hidden;
+    border-radius: 99px;
+    background: #e0e8e8;
+  }
+  .progress-track span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #0b6478, #43b8bb);
+    transition: width 260ms ease;
+  }
+  .progress-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+  }
+  .progress-controls button {
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--muted);
+    background: var(--surface);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+  .progress-controls button[aria-pressed="true"] {
+    color: var(--teal);
+    border-color: #92cbd2;
+    background: #e2f2f3;
+  }
+
+  .side-nav { padding: 11px; }
+  .side-nav p {
+    margin: 8px 10px 7px;
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .side-nav a {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    color: #45606d;
+    font-size: 0.78rem;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .side-nav a:hover,
+  .side-nav a.active {
+    color: var(--teal);
+    background: #e7f1f1;
+  }
+  .step-dot {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--muted);
+    background: #fff;
+    font-size: 0.66rem;
+    font-weight: 800;
+  }
+  .side-nav a.active .step-dot {
+    color: #fff;
+    border-color: var(--teal);
+    background: var(--teal);
+  }
+
+  main { min-width: 0; }
+
+  section {
+    margin-bottom: 52px;
+    scroll-margin-top: 86px;
+  }
+
+  .section-eyebrow {
+    margin: 0 0 5px;
+    color: var(--teal);
+    font-size: 0.72rem;
+    font-weight: 850;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+
+  .section-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .section-heading h2 {
+    margin: 0;
+    color: var(--navy);
+    font-size: clamp(1.5rem, 3vw, 2.05rem);
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+  }
+  .section-heading p {
+    max-width: 610px;
+    margin: 7px 0 0;
+    color: var(--muted);
+    font-size: 0.91rem;
+  }
+  .section-count {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(255,253,248,0.7);
+    font-size: 0.72rem;
+    font-weight: 750;
+  }
+
+  .hero-card {
+    padding: clamp(20px, 3vw, 30px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    padding: 15px 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #f0f6f5;
+    font-size: 0.88rem;
+  }
+  .callout + .callout { margin-top: 10px; }
+  .callout.warning {
+    color: #604512;
+    border-color: #e5ce91;
+    background: var(--warning-soft);
+  }
+  .callout.danger {
+    color: #742828;
+    border-color: #e6bcb4;
+    background: var(--danger-soft);
+  }
+  .callout.success {
+    color: #1b583f;
+    border-color: #b7d9c7;
+    background: var(--success-soft);
+  }
+  .callout-icon {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 27px;
+    height: 27px;
+    border-radius: 8px;
+    color: #fff;
+    background: var(--teal);
+    font-size: 0.77rem;
+    font-weight: 850;
+  }
+  .callout.warning .callout-icon { background: #9a731d; }
+  .callout.danger .callout-icon { background: var(--danger); }
+  .callout.success .callout-icon { background: var(--success); }
+  .callout p { margin: 0; }
+  .callout strong { font-weight: 800; }
+
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+  }
+
+  .info-card {
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow-small);
+  }
+  .info-card h3 {
+    margin: 0 0 12px;
+    color: var(--navy);
+    font-size: 1rem;
+  }
+  .info-card p { margin: 0 0 10px; color: var(--muted); font-size: 0.87rem; }
+  .info-card p:last-child { margin-bottom: 0; }
+  .info-card ul {
+    margin: 0;
+    padding-left: 1.15rem;
+    color: #425a66;
+    font-size: 0.87rem;
+  }
+  .info-card li + li { margin-top: 7px; }
+
+  .flow {
+    display: grid;
+    gap: 8px;
+    margin-top: 3px;
+  }
+  .flow-step {
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #d7e2e3;
+    border-radius: 10px;
+    background: #f7faf9;
+  }
+  .flow-step-num {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    color: var(--teal);
+    background: #dceff0;
+    font-size: 0.75rem;
+    font-weight: 850;
+  }
+  .flow-step strong { display: block; color: var(--navy); font-size: 0.84rem; }
+  .flow-step span { display: block; color: var(--muted); font-size: 0.75rem; }
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    margin-top: 15px;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: var(--line);
+  }
+  .stat {
+    padding: 14px;
+    background: var(--surface);
+  }
+  .stat b {
+    display: block;
+    color: var(--navy);
+    font-size: 1.2rem;
+    letter-spacing: -0.02em;
+  }
+  .stat span {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 0.69rem;
+    font-weight: 650;
+  }
+
+  .phase {
+    margin-bottom: 48px;
+  }
+
+  .phase-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 16px;
+    padding: 14px 17px;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: linear-gradient(90deg, #e8f2f1, rgba(255,253,248,0.72));
+  }
+  .phase-number {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 41px;
+    height: 41px;
+    border-radius: 11px;
+    color: #fff;
+    background: var(--navy);
+    font-size: 0.86rem;
+    font-weight: 850;
+    box-shadow: 0 7px 15px rgba(16, 42, 67, 0.18);
+  }
+  .phase-head h3 {
+    margin: 0;
+    color: var(--navy);
+    font-size: 1.06rem;
+  }
+  .phase-head p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .test-list { display: grid; gap: 12px; }
+
+  .test-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: var(--shadow-small);
+    transition: border-color 150ms ease, background-color 150ms ease, opacity 150ms ease;
+  }
+  .test-card:hover { border-color: #a6c5c8; }
+  .test-card:has(.test-checkbox:checked) {
+    border-color: #a9cdc1;
+    background: linear-gradient(90deg, #f3faf7, var(--surface));
+  }
+  .test-card:has(.test-checkbox:checked) .test-title {
+    color: #3f6255;
+  }
+
+  .test-check {
+    position: relative;
+    display: block;
+    width: 29px;
+    height: 29px;
+    margin-top: 2px;
+  }
+  .test-checkbox {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+  .checkbox-ui {
+    position: absolute;
+    inset: 0;
+    display: block;
+    border: 1.5px solid #aebfc5;
+    border-radius: 8px;
+    background: #fff;
+    transition: background-color 140ms ease, border-color 140ms ease;
+  }
+  .checkbox-ui::after {
+    content: "";
+    position: absolute;
+    left: 9px;
+    top: 5px;
+    width: 7px;
+    height: 12px;
+    border-right: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    opacity: 0;
+    transform: rotate(42deg) scale(0.7);
+    transition: opacity 140ms ease, transform 140ms ease;
+  }
+  .test-checkbox:checked + .checkbox-ui {
+    border-color: var(--success);
+    background: var(--success);
+  }
+  .test-checkbox:checked + .checkbox-ui::after {
+    opacity: 1;
+    transform: rotate(42deg) scale(1);
+  }
+
+  .test-topline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 5px;
+    color: var(--muted);
+    font-size: 0.67rem;
+    font-weight: 750;
+    letter-spacing: 0.03em;
+  }
+  .test-id {
+    color: var(--teal);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-weight: 800;
+  }
+  .level {
+    padding: 2px 6px;
+    border-radius: 99px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .level.essential { color: #85411e; background: #ffe5d4; }
+  .level.advanced { color: #526473; background: #e7edef; }
+  .time { color: #7b8d96; font-weight: 600; }
+
+  .test-title {
+    margin: 0;
+    color: var(--navy);
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+
+  .test-body {
+    margin: 8px 0 0;
+    color: #445c68;
+    font-size: 0.86rem;
+  }
+  .test-body code,
+  .expected code,
+  .trouble td code,
+  .info-card code,
+  .callout code,
+  .report-card code {
+    padding: 1px 5px;
+    border: 1px solid #d5e1e2;
+    border-radius: 4px;
+    color: #20515a;
+    background: #f2f7f6;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.84em;
+    overflow-wrap: anywhere;
+  }
+
+  .expected {
+    margin-top: 11px;
+    padding: 10px 12px;
+    border-left: 3px solid #5bb3aa;
+    border-radius: 0 8px 8px 0;
+    color: #33564f;
+    background: #edf8f4;
+    font-size: 0.81rem;
+  }
+  .expected > strong:first-child {
+    display: block;
+    margin-bottom: 2px;
+    color: #1e5b50;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .expected strong { color: #1e5b50; font-weight: 800; }
+
+  details.command {
+    margin-top: 11px;
+    border: 1px solid #d5e1e3;
+    border-radius: 9px;
+    background: #f7faf9;
+  }
+  details.command summary {
+    padding: 9px 11px;
+    color: #35545e;
+    cursor: pointer;
+    font-size: 0.77rem;
+    font-weight: 750;
+    user-select: none;
+  }
+  details.command[open] summary { border-bottom: 1px solid #dce7e7; }
+  .code-wrap { position: relative; }
+  .code-wrap pre {
+    margin: 0;
+    padding: 13px 46px 13px 13px;
+    overflow-x: auto;
+    border-radius: 0 0 8px 8px;
+    color: var(--code-ink);
+    background: var(--code);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.74rem;
+    line-height: 1.6;
+    tab-size: 2;
+    white-space: pre;
+  }
+  .copy-code {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 7px;
+    color: #cde6e6;
+    background: rgba(255,255,255,0.08);
+  }
+  .copy-code:hover { background: rgba(255,255,255,0.17); }
+  .copy-code svg { width: 14px; height: 14px; }
+
+  .lan-tool {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    margin-top: 13px;
+  }
+  .field {
+    display: grid;
+    gap: 5px;
+  }
+  .field label {
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .field input,
+  .field textarea {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    color: var(--ink);
+    background: #fff;
+  }
+  .field textarea { min-height: 92px; resize: vertical; }
+  .tool-output {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 9px;
+    padding: 10px 11px;
+    border: 1px dashed #9fc3c6;
+    border-radius: 9px;
+    color: var(--teal);
+    background: #eef8f7;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+  }
+  .tool-output button {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border: 1px solid #9fc3c6;
+    border-radius: 6px;
+    color: var(--teal);
+    background: #fff;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  .trouble-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow-small);
+  }
+  table.trouble {
+    width: 100%;
+    min-width: 760px;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.83rem;
+  }
+  .trouble th {
+    padding: 12px 14px;
+    color: #41606c;
+    background: #e9f1f0;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.69rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .trouble td {
+    padding: 13px 14px;
+    vertical-align: top;
+    border-bottom: 1px solid #e6edee;
+    color: #435a65;
+  }
+  .trouble tr:last-child td { border-bottom: 0; }
+  .trouble td:first-child { color: var(--navy); font-weight: 700; }
+  .trouble tr:hover td { background: #fbfcfa; }
+
+  .report-card {
+    padding: clamp(20px, 3vw, 28px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .report-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .report-grid .wide { grid-column: 1 / -1; }
+  .report-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-top: 15px;
+  }
+  .button.dark {
+    color: #fff;
+    background: var(--navy);
+  }
+  .button.dark:hover { background: #173e5d; }
+  .button.outline {
+    color: var(--teal);
+    border-color: var(--line-strong);
+    background: #fff;
+  }
+
+  .dev-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .coverage-list {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .coverage-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: #405c66;
+    font-size: 0.84rem;
+  }
+  .coverage-list li::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: #55a58e;
+  }
+  .coverage-list li.known::before { background: #b08a3d; }
+
+  .empty-filter {
+    display: none;
+    padding: 20px;
+    border: 1px dashed var(--line-strong);
+    border-radius: 12px;
+    color: var(--muted);
+    text-align: center;
+    background: rgba(255,253,248,0.65);
+    font-size: 0.88rem;
+  }
+
+  footer {
+    margin-top: 50px;
+    padding: 22px 0 8px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+  footer p { margin: 0; }
+  footer p + p { margin-top: 4px; }
+
+  #toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 50;
+    max-width: min(360px, calc(100vw - 40px));
+    padding: 11px 15px;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 9px;
+    color: #eefbfa;
+    background: #123c4a;
+    box-shadow: 0 15px 35px rgba(0,0,0,0.24);
+    font-size: 0.82rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: opacity 150ms ease, transform 150ms ease;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+
+  .saved-indicator {
+    color: var(--muted);
+    font-size: 0.68rem;
+  }
+
+  @media (max-width: 1100px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .artifact-card { max-width: 560px; }
+    .page { grid-template-columns: 1fr; }
+    .sidebar { position: static; grid-row: auto; }
+    .side-nav { display: none; }
+    .progress-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px 18px;
+      align-items: center;
+    }
+    .progress-track { margin-top: 0; }
+    .progress-controls { margin-top: 0; }
+  }
+
+  @media (max-width: 760px) {
+    .hero-inner,
+    .top-nav-inner,
+    .page { width: min(100% - 24px, var(--max)); }
+    .hero-inner { padding-top: 22px; }
+    .hero h1 { font-size: clamp(2.1rem, 11vw, 3.4rem); }
+    .top-nav-inner { min-height: 53px; }
+    .top-nav-links { gap: 0.8rem; }
+    .top-nav a { padding: 15px 0; font-size: 0.72rem; }
+    .nav-progress { display: none; }
+    .page { margin-top: 18px; gap: 22px; }
+    .progress-card { grid-template-columns: 1fr; }
+    .progress-track { margin-top: 2px; }
+    .overview-grid,
+    .dev-grid,
+    .report-grid { grid-template-columns: 1fr; }
+    .stat-strip { grid-template-columns: repeat(2, 1fr); }
+    .test-card { grid-template-columns: 27px minmax(0, 1fr); padding: 15px; gap: 10px; }
+    .test-check { width: 26px; height: 26px; }
+    .checkbox-ui::after { left: 8px; top: 4px; width: 6px; height: 11px; }
+    .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+    .lan-tool { grid-template-columns: 1fr; }
+    .report-grid .wide { grid-column: auto; }
+    .hero-meta { gap: 10px 14px; }
+    .hero-actions .button { flex: 1 1 auto; }
+  }
+
+  @media print {
+    @page { margin: 16mm; }
+    body { background: #fff; color: #000; font-size: 10pt; }
+    .hero {
+      color: #000;
+      background: #fff;
+      border-bottom: 2px solid #000;
+    }
+    .hero::before, .hero::after, .brand-mark, .top-nav, .sidebar, .button, .copy-code,
+    .tool-output button, .report-actions, #toast, .hero-meta, .artifact-warning { display: none !important; }
+    .hero-inner, .page { width: 100%; padding: 0; margin: 0; display: block; }
+    .hero-grid { display: block; }
+    .hero h1 { color: #000; font-size: 26pt; }
+    .hero h1 span, .kicker, .lede, .artifact-name, .artifact-meta dt, .artifact-meta dd { color: #000; }
+    .artifact-card { max-width: none; border: 1px solid #999; background: #fff; box-shadow: none; }
+    .hash { color: #000; background: #eee; }
+    section { break-inside: avoid; margin-bottom: 22px; }
+    .test-card, .info-card, .hero-card, .report-card { break-inside: avoid; box-shadow: none; }
+    details.command { display: none; }
+    .page { display: block; }
+    main { width: 100%; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to test plan</a>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="brand-line">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M12 2.8 20 6v6.1c0 5.3-3.3 8.9-8 10.6-4.7-1.7-8-5.3-8-10.6V6l8-3.2Z" stroke="#d9f5f2" stroke-width="1.5"/>
+          <path d="M8.2 10.1h7.6c1.1 0 1.9.7 2.1 1.8l.4 2.2c.2 1.2-.7 2.2-1.9 2.2-.9 0-1.5-.5-1.9-1.2l-.5-.7h-2.4l-.5.7c-.4.7-1 1.2-1.9 1.2-1.2 0-2.1-1-1.9-2.2l.4-2.2c.2-1.1 1-1.8 2.1-1.8Z" fill="#d9f5f2"/>
+          <path d="M8.8 12v2M7.8 13h2" stroke="#0b5367" stroke-width="1.2" stroke-linecap="round"/>
+          <circle cx="14.7" cy="12.7" r=".65" fill="#0b5367"/>
+          <circle cx="16.2" cy="14.1" r=".65" fill="#0b5367"/>
+        </svg>
+      </span>
+      <p class="brand-name">Playground Control</p>
+      <span class="release-chip">v1.0.0</span>
+      <span class="release-chip">Windows 10/11 x64</span>
+      <span class="mini-chip">Acceptance guide</span>
+    </div>
+
+    <div class="hero-grid">
+      <div>
+        <p class="kicker">Windows test runbook</p>
+        <h1>Prove the switch<br><span>actually controls games.</span></h1>
+        <p class="lede">A practical, repeatable acceptance test for installation, local PIN setup, LAN access, game close behavior, persistence, security boundaries, and clean removal. Work through the essentials first, then use the advanced checks for a release candidate.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#before-you-begin">Start testing</a>
+          <a class="button ghost" href="#developer-checks">Automated checks</a>
+          <button class="button ghost" type="button" id="printButton">Print / save PDF</button>
+          <a class="button ghost" href="dist/PlaygroundControl.exe" download>Get the EXE</a>
+        </div>
+        <div class="hero-meta">
+          <span>23 test items</span>
+          <span>About 50-65 minutes</span>
+          <span>Destructive uninstall test at the end</span>
+        </div>
+      </div>
+
+      <aside class="artifact-card" aria-label="Release artifact details">
+        <p class="artifact-label">Release artifact</p>
+        <p class="artifact-name">PlaygroundControl.exe</p>
+        <dl class="artifact-meta">
+          <dt>Build</dt><dd>1.0.0, single self-installing EXE</dd>
+          <dt>Target</dt><dd>Windows 10/11 x64, no runtime install</dd>
+          <dt>Size</dt><dd>About 7.2 MiB</dd>
+          <dt>Status</dt><dd>Unsigned test build</dd>
+        </dl>
+        <div class="hash-row">
+          <p class="hash" id="artifactHash">25d55e728f94cb221a40173c3af5bcde0516bc4e6dcdd51068eb6160d08d1ecb</p>
+          <button class="icon-button" type="button" data-copy-target="#artifactHash" aria-label="Copy SHA-256 hash" title="Copy SHA-256">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg>
+          </button>
+        </div>
+        <p class="artifact-warning">SmartScreen may warn because this build is not code-signed. Verify the hash before running.</p>
+      </aside>
+    </div>
+  </div>
+</header>
+
+<nav class="top-nav" aria-label="Section navigation">
+  <div class="top-nav-inner">
+    <div class="top-nav-links">
+      <a href="#before-you-begin">Before you begin</a>
+      <a href="#install">Install</a>
+      <a href="#first-run">First run</a>
+      <a href="#enforcement">Enforcement</a>
+      <a href="#lan-security">LAN/security</a>
+      <a href="#uninstall">Uninstall</a>
+      <a href="#troubleshooting">Troubleshoot</a>
+      <a href="#developer-checks">Developer checks</a>
+    </div>
+    <div class="nav-progress" aria-label="Checklist progress">
+      <span id="navProgressText">0 / 0</span>
+      <span class="mini-bar"><span id="navProgressBar"></span></span>
+    </div>
+  </div>
+</nav>
+
+<div class="page">
+  <aside class="sidebar" aria-label="Run controls">
+    <div class="progress-card">
+      <div>
+        <div class="progress-top">
+          <span class="progress-label">Tests completed</span>
+          <span class="progress-number"><span id="doneCount">0</span><small> / <span id="totalCount">0</span></small></span>
+        </div>
+        <div class="progress-track"><span id="progressBar"></span></div>
+      </div>
+      <div class="progress-controls">
+        <button type="button" id="essentialsButton" aria-pressed="false">Essentials only</button>
+        <button type="button" id="resetButton">Reset</button>
+        <span class="saved-indicator" id="savedIndicator">Progress saves locally</span>
+      </div>
+    </div>
+
+    <nav class="side-nav" aria-label="Guide contents">
+      <p>Run order</p>
+      <a href="#before-you-begin"><span class="step-dot">0</span>Before you begin</a>
+      <a href="#install"><span class="step-dot">1</span>Installation</a>
+      <a href="#first-run"><span class="step-dot">2</span>First run and PIN</a>
+      <a href="#enforcement"><span class="step-dot">3</span>Play enforcement</a>
+      <a href="#lan-security"><span class="step-dot">4</span>LAN and security</a>
+      <a href="#uninstall"><span class="step-dot">5</span>Uninstall</a>
+      <a href="#troubleshooting"><span class="step-dot">?</span>Troubleshooting</a>
+      <a href="#developer-checks"><span class="step-dot">&lt;/&gt;</span>Developer checks</a>
+      <a href="#report"><span class="step-dot">R</span>Test report</a>
+    </nav>
+  </aside>
+
+  <main id="main">
+    <section id="before-you-begin">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Before you begin</p>
+          <h2>Set up a safe test bench</h2>
+          <p>This product installs a Windows service and closes configured processes. Use a disposable PC or VM, not a work machine or a machine with unsaved game progress.</p>
+        </div>
+        <span class="section-count">Setup</span>
+      </div>
+
+      <div class="hero-card">
+        <div class="callout warning">
+          <span class="callout-icon" aria-hidden="true">!</span>
+          <p><strong>Use a disposable Windows environment.</strong> Uninstall intentionally deletes the PIN, game list, audit history, service, and firewall rule. Enforcement can force-close configured applications after a 10-second grace period.</p>
+        </div>
+        <div class="callout">
+          <span class="callout-icon" aria-hidden="true">i</span>
+          <p><strong>Two Windows roles are required for the realistic test:</strong> a parent/administrator account for installation and recovery, and a standard player account for the tamper-resistance check. Do not make the player an administrator if you want the documented guarantee.</p>
+        </div>
+
+        <div class="overview-grid">
+          <article class="info-card">
+            <h3>You will need</h3>
+            <ul>
+              <li>Windows 10 or 11 x64 PC or VM with local administrator access.</li>
+              <li>A second device on the same private LAN: phone, tablet, or another PC.</li>
+              <li>A standard (non-admin) Windows player account for the privilege test.</li>
+              <li>The artifact <code>dist/PlaygroundControl.exe</code> and its SHA-256.</li>
+              <li>A test application already present on Windows. This guide uses <code>notepad.exe</code> and <code>timeout.exe</code>.</li>
+              <li>Time to reboot the PC once and to perform a destructive uninstall at the end.</li>
+            </ul>
+          </article>
+
+          <article class="info-card">
+            <h3>How the system fits together</h3>
+            <div class="flow" aria-label="Control flow diagram">
+              <div class="flow-step"><span class="flow-step-num">1</span><div><strong>Parent device</strong><span>Phone or PC on the same LAN, authenticated with the admin PIN.</span></div></div>
+              <div class="flow-step"><span class="flow-step-num">2</span><div><strong>Playground Control service</strong><span>Listens on TCP 8080 and persists one play-permission flag plus the game list.</span></div></div>
+              <div class="flow-step"><span class="flow-step-num">3</span><div><strong>Windows process guard</strong><span>Checks every 500 ms while blocked, requests a clean close, then force-closes after 10 seconds.</span></div></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="stat-strip" aria-label="System defaults">
+          <div class="stat"><b>8080</b><span>Fixed HTTP port</span></div>
+          <div class="stat"><b>500 ms</b><span>Process scan interval</span></div>
+          <div class="stat"><b>10 s</b><span>Grace before force-close</span></div>
+          <div class="stat"><b>Blocked</b><span>Default play state</span></div>
+        </div>
+
+        <div class="test-list" style="margin-top:18px">
+          <article class="test-card" data-test="prep-admin" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="prep-admin">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark setup with administrator account complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">P.1</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Confirm the test PC is disposable and you are an administrator</h3>
+              <p class="test-body">Open an elevated PowerShell window and confirm elevation. The product installs a LocalSystem service and writes to Program Files and ProgramData.</p>
+              <details class="command">
+                <summary>PowerShell check</summary>
+                <div class="code-wrap"><pre><code>([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+  [Security.Principal.WindowsBuiltInRole]::Administrator
+)</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong><code>True</code>. If it returns <code>False</code>, relaunch PowerShell with <strong>Run as administrator</strong>.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="prep-lan" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="prep-lan">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark LAN setup complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">P.2</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Connect both devices to the same private LAN and note the PC address</h3>
+              <p class="test-body">The built-in firewall rule is inbound, TCP 8080, private profile, local subnet only. The Windows network profile must be <strong>Private</strong>, not Public.</p>
+              <div class="lan-tool">
+                <div class="field">
+                  <label for="lanIPInput">PC IPv4 address</label>
+                  <input id="lanIPInput" type="text" inputmode="decimal" value="192.168.1.50" spellcheck="false" aria-describedby="lanURLOutput">
+                </div>
+                <button class="button small" type="button" id="lanBuildButton" style="align-self:end">Build LAN URL</button>
+              </div>
+              <div class="tool-output" id="lanURLOutput">http://192.168.1.50:8080</div>
+              <details class="command">
+                <summary>PowerShell: find the PC LAN address</summary>
+                <div class="code-wrap"><pre><code>Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
+  Select-Object InterfaceAlias, IPAddress
+Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>A private IPv4 address such as <code>192.168.1.50</code>, and <code>NetworkCategory = Private</code>. Keep the phone on the same Wi-Fi/LAN and disable guest Wi-Fi client isolation if necessary.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="prep-hash" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="prep-hash">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark artifact hash verification complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">P.3</span><span class="level essential">Essential</span><span class="time">1 min</span></div>
+              <h3 class="test-title">Copy the EXE to the test PC and verify its SHA-256</h3>
+              <p class="test-body">From the project folder, transfer <code>dist/PlaygroundControl.exe</code> to a local folder such as <code>C:\Tests</code>. Do not run it from a network share. The expected hash is shown in the hero above.</p>
+              <details class="command">
+                <summary>PowerShell: verify the exact artifact</summary>
+                <div class="code-wrap"><pre><code>Get-FileHash .\PlaygroundControl.exe -Algorithm SHA256 |
+  Format-List Algorithm, Hash, Path
+
+# Expected:
+# 25d55e728f94cb221a40173c3af5bcde0516bc4e6dcdd51068eb6160d08d1ecb</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>The hash matches exactly. If it does not, stop and do not run the file.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 1</p>
+          <h2>Installation and service registration</h2>
+          <p>Observe the first-run experience and prove that Windows received the service, firewall rule, uninstall entry, and protected data directory.</p>
+        </div>
+        <span class="section-count">4 tests</span>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">01</span>
+          <div><h3>Install and verify the service</h3><p>UAC, SmartScreen, Program Files, SCM, firewall, and data ACL.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="install-launch" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="install-launch">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark installer launch complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">I.1</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Double-click the EXE and approve the UAC prompt</h3>
+              <p class="test-body">SmartScreen may show <strong>Windows protected your PC</strong> because the test EXE is unsigned. If you verified the hash, choose <strong>More info</strong>, then <strong>Run anyway</strong>. Approve the administrator prompt. No separate installer framework or runtime is needed.</p>
+              <div class="expected"><strong>Expected</strong>The installer completes without a console window. It copies itself to <code>C:\Program Files\PlaygroundControl\PlaygroundControl.exe</code>, starts the service, and opens a local first-run setup page in your default browser. If the browser does not open, see Troubleshooting.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="install-service" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="install-service">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark service verification complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">I.2</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Verify the service, listener, and firewall rule</h3>
+              <p class="test-body">Open an elevated PowerShell window and run the following. The service should run as <code>LocalSystem</code>, start automatically, and listen on TCP 8080.</p>
+              <details class="command">
+                <summary>PowerShell: inspect installed components</summary>
+                <div class="code-wrap"><pre><code>Get-CimInstance Win32_Service -Filter "Name='PlaygroundControl'" |
+  Select-Object Name, State, StartMode, StartName, PathName
+
+Get-Service PlaygroundControl | Format-List Name, Status, StartType
+
+Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue |
+  Select-Object LocalAddress, LocalPort, State, OwningProcess
+
+Get-NetFirewallRule -DisplayName 'Playground Control' -ErrorAction SilentlyContinue |
+  Select-Object DisplayName, Enabled, Direction, Action, Profile</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Service <code>Running</code>, StartMode <code>Auto</code>, StartName <code>LocalSystem</code>. TCP 8080 is listening. Firewall rule enabled, inbound, allow, private profile. The EXE path points into Program Files.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="install-health" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="install-health">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark health endpoint verification complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">I.3</span><span class="level essential">Essential</span><span class="time">1 min</span></div>
+              <h3 class="test-title">Confirm the loopback health endpoint</h3>
+              <p class="test-body">The dashboard is served by the same EXE. Loopback health is intentionally local-only.</p>
+              <details class="command">
+                <summary>PowerShell: local health check</summary>
+                <div class="code-wrap"><pre><code>Invoke-RestMethod http://127.0.0.1:8080/api/v1/health |
+  ConvertTo-Json -Depth 3
+
+# Expected shape:
+# {
+#   "ok": true,
+#   "version": "1.0.0",
+#   "setup": true
+# }</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>HTTP 200 with <code>ok: true</code>. If the first-run setup is still pending, <code>setup</code> is <code>true</code>; later it will be <code>false</code>.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="install-acl" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="install-acl">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark data ACL verification complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">I.4</span><span class="level advanced">Advanced</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Verify the data directory is not readable by standard users</h3>
+              <p class="test-body">The installer applies an explicit ACL. Use an elevated PowerShell prompt and inspect the ProgramData directory. Standard users should not appear in the access list.</p>
+              <details class="command">
+                <summary>PowerShell: inspect files and ACL</summary>
+                <div class="code-wrap"><pre><code>Get-ChildItem 'C:\Program Files\PlaygroundControl' -Force
+Get-ChildItem 'C:\ProgramData\PlaygroundControl' -Force
+
+icacls 'C:\ProgramData\PlaygroundControl'
+
+# After setup, the following should exist:
+#   auth.json, setup.token (until setup completes), service.log
+# The ACL should show SYSTEM and Administrators, not BUILTIN\Users.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Program Files contains the EXE. ProgramData is accessible to SYSTEM and Administrators only. Standard users must not be granted access.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="first-run">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 2</p>
+          <h2>First run, PIN setup, and access rules</h2>
+          <p>Prove that the initial PIN can only be claimed on the gaming PC, and that later LAN access requires authentication.</p>
+        </div>
+        <span class="section-count">4 tests</span>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">02</span>
+          <div><h3>Claim the administrator account</h3><p>Local-only setup, numeric PIN, login, optional PIN change, and lockout.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="setup-local-only" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="setup-local-only">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark local-only setup rule complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">A.1</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Before creating a PIN, try the setup page from another LAN device</h3>
+              <p class="test-body">Do this immediately after installation, while the dashboard still says setup is required. On your phone, open <code>http://&lt;PC-LAN-IP&gt;:8080/setup</code>. This is the negative test: a phone must not be able to claim the administrator PIN.</p>
+              <div class="expected"><strong>Expected</strong>The phone shows a message that initial setup must be completed on the gaming PC. It must not display a usable PIN form. Then return to the PC and complete setup locally.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="setup-pin" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="setup-pin">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark PIN setup complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">A.2</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Create the administrator PIN on the gaming PC</h3>
+              <p class="test-body">The setup page should be open at <code>http://127.0.0.1:8080/setup?token=...</code>. Choose 6 to 12 digits, confirm the PIN, and save. The token is one-time and expires after 15 minutes.</p>
+              <div class="expected"><strong>Expected</strong>The setup succeeds, the setup token disappears from the URL, and the dashboard opens. The play state should say <strong>Play is blocked</strong> with no game configured yet. The PIN is never shown again.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="login-lan" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="login-lan">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark LAN login complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">A.3</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Sign in from a second device on the LAN</h3>
+              <p class="test-body">On the phone, open <code>http://&lt;PC-LAN-IP&gt;:8080</code>. Try one incorrect PIN, then sign in with the correct PIN. The dashboard is responsive and should show the LAN URL and block state.</p>
+              <div class="expected"><strong>Expected</strong>The wrong PIN is rejected. The correct PIN opens the dashboard. Browser traffic is HTTP on the private LAN, so do not use this over an untrusted or public network.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="login-lock" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="login-lock">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark lockout test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">A.4</span><span class="level advanced">Advanced</span><span class="time">5 min</span></div>
+              <h3 class="test-title">Verify login throttling, then clear it with an admin service restart</h3>
+              <p class="test-body">From one device, enter a wrong PIN five times. The fifth attempt should trigger a temporary IP lock. The lock is held in memory; restarting the service as an administrator clears it without changing the PIN or game state.</p>
+              <details class="command">
+                <summary>PowerShell: clear the in-memory login throttle</summary>
+                <div class="code-wrap"><pre><code>Restart-Service PlaygroundControl -Force
+(Get-Service PlaygroundControl).Status</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>After five failures, login is refused for roughly 15 minutes with HTTP 429 / a lock message. After the service restart, the correct PIN works again. All browser sessions are invalidated by the restart.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="enforcement">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 3</p>
+          <h2>Core play enforcement</h2>
+          <p>This is the heart of the acceptance test. First verify that Roblox is stopped before launch by the built-in guard, then use harmless built-in applications for the close and force-kill paths.</p>
+        </div>
+        <span class="section-count">6 tests</span>
+      </div>
+
+      <div class="callout" style="margin-bottom:16px">
+        <span class="callout-icon" aria-hidden="true">i</span>
+        <p><strong>Safety:</strong> the built-in Roblox guard is always active while play is off, even if Roblox has never been added to the custom list. Add only <code>notepad.exe</code> and <code>timeout.exe</code> to the custom list for this run. Do not add system processes such as <code>explorer.exe</code>, <code>lsass.exe</code>, or <code>svchost.exe</code>; the app rejects a known critical-process list, but the safe test is still deliberately small. Remember that settings persist across reboot.</p>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">03</span>
+          <div><h3>Verify the flag actually decides whether games can open</h3><p>Test the mandatory Roblox pre-launch guard, then add games, block, allow, revoke while running, and verify forced termination.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="roblox-prelaunch" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="roblox-prelaunch">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark Roblox pre-launch guard test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">R.1</span><span class="level essential">Essential</span><span class="time">5 min</span></div>
+              <h3 class="test-title">Roblox must not launch while play is blocked</h3>
+              <p class="test-body">Do not add Roblox to the dashboard: this guard is built in. With play blocked, close every Roblox window, then open Roblox from the Start menu, its desktop shortcut, or a Play button on the Roblox website. If Roblox is not installed, install it once while play is allowed, then return to blocked mode.</p>
+              <details class="command">
+                <summary>Elevated PowerShell: confirm Windows launch interception is armed</summary>
+                <div class="code-wrap"><pre><code>'RobloxPlayerBeta.exe','RobloxPlayerLauncher.exe','RobloxPlayerInstaller.exe' | ForEach-Object {
+  Write-Host "--- $_"
+  reg.exe query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$_" /v Debugger
+}
+
+# Expected Debugger value contains PlaygroundControl.exe and --deny-launch.
+# The 32-bit registry view should have the same guard:
+reg.exe query "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\RobloxPlayerBeta.exe" /v Debugger</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Roblox does not open. A Playground Control message explains that Roblox is blocked while play is off, and Task Manager shows no new <code>RobloxPlayerBeta.exe</code> process. The IFEO entries exist in both registry views. Press <strong>Allow play</strong>, launch Roblox once, and confirm it opens. Press <strong>Block play</strong> again and confirm a fresh launch is intercepted.</div>
+            </div>
+          </article>
+          <article class="test-card" data-test="game-blocked" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="game-blocked">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark blocked Notepad test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">E.1</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Add Notepad while play is blocked and try to start it</h3>
+              <p class="test-body">On the dashboard add a game with display name <strong>Notepad test</strong> and executable <strong>notepad.exe</strong>. Leave the optional path blank. Then run Notepad explicitly from System32.</p>
+              <details class="command">
+                <summary>PowerShell: launch the test process</summary>
+                <div class="code-wrap"><pre><code>Start-Process "$env:SystemRoot\System32\notepad.exe"</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Notepad appears and is closed cleanly (normally within about 1 second). Recent activity shows detection, close request, and a closed event. If Windows 11 opens a packaged Notepad through an alias, use the explicit System32 path above.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="game-allowed" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="game-allowed">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark allowed Notepad test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">E.2</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Allow play and confirm Notepad stays open</h3>
+              <p class="test-body">Press <strong>Allow play</strong>. Confirm the status becomes <strong>Play is allowed</strong>. Launch Notepad again.</p>
+              <div class="expected"><strong>Expected</strong>Notepad remains open. There is no forced close while play is allowed. The permission persists even after you close the browser.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="game-revoke" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="game-revoke">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark revoke-while-running test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">E.3</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Revoke play while Notepad is running</h3>
+              <p class="test-body">With the allowed Notepad still open, press <strong>Block play</strong> and confirm the dialog.</p>
+              <div class="expected"><strong>Expected</strong>The running Notepad is asked to close and exits. The dashboard returns to <strong>Play is blocked</strong> and permission is saved as blocked.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="game-force" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="game-force">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark forced-close fallback test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">E.4</span><span class="level advanced">Advanced</span><span class="time">4 min</span></div>
+              <h3 class="test-title">Verify the 10-second force-close fallback with timeout.exe</h3>
+              <p class="test-body">While play is blocked, add <strong>Console timeout test</strong> with executable <strong>timeout.exe</strong>. Open an interactive Command Prompt and run the command below. A console process has no top-level game window to receive a clean close, so this exercises the forced path. The process should disappear after about 10 seconds. Remove the timeout.exe entry afterward.</p>
+              <details class="command">
+                <summary>Command Prompt: start a long-lived console process</summary>
+                <div class="code-wrap"><pre><code>timeout /t 300</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Activity shows that a clean close was unavailable, followed by a force-close event after the grace period. The command prompt returns when timeout.exe is terminated. If the console window itself disappears or remains is not important; verify the process is gone with Task Manager or <code>Get-Process timeout -ErrorAction SilentlyContinue</code>.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="persist-reboot" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="persist-reboot">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark persistence test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">E.5</span><span class="level essential">Essential</span><span class="time">6 min</span></div>
+              <h3 class="test-title">Restart the service and reboot; confirm the flag and games persist</h3>
+              <p class="test-body">Set a known state, for example <strong>Play is allowed</strong> with <strong>Notepad test</strong> configured. Restart the service, sign in again, then reboot the test PC and sign in once more.</p>
+              <details class="command">
+                <summary>PowerShell: restart the service and check state</summary>
+                <div class="code-wrap"><pre><code>Restart-Service PlaygroundControl -Force
+Start-Sleep -Seconds 2
+(Get-Service PlaygroundControl).Status
+
+# After reboot, open the dashboard again and sign in.
+# Expected: Play is allowed and the game list are unchanged.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>The service returns after reboot and the saved permission/game list are intact. Sessions do not survive service restart; sign in again. Play state is persistent by design and does not auto-expire.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="lan-security">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 4</p>
+          <h2>LAN, authentication, and tamper boundaries</h2>
+          <p>Verify the server is reachable where intended, rejects the wrong traffic, and records useful evidence. Some checks require a second device or a standard user account.</p>
+        </div>
+        <span class="section-count">4 tests</span>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">04</span>
+          <div><h3>Check the security boundary</h3><p>Local-only endpoints, private-source networking, endpoint auth, ACLs, and standard-user limits.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="api-boundary" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="api-boundary">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark API security boundary test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">S.1</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Prove that state and health endpoints are not anonymous</h3>
+              <p class="test-body">On the PC, use curl.exe. State must require a session. Health must be loopback-only. A forged Host header must be rejected by the Host allowlist.</p>
+              <details class="command">
+                <summary>PowerShell / curl.exe security checks</summary>
+                <div class="code-wrap"><pre><code># Unauthenticated state: expected HTTP 401
+curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8080/api/v1/state
+
+# Local health: expected HTTP 200
+curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8080/api/v1/health
+
+# Forged Host header: expected HTTP 421
+curl.exe -s -o NUL -w "%{http_code}`n" -H "Host: evil.example" http://127.0.0.1:8080/api/v1/bootstrap
+
+# From a LAN device, health should be 403:
+# curl -s -o NUL -w "%{http_code}\n" http://PC-LAN-IP:8080/api/v1/health</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong><code>401</code> for unauthenticated state, <code>200</code> for local health, <code>421</code> for the forged Host. LAN health is <code>403</code> while the normal LAN dashboard remains reachable.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="audit-evidence" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="audit-evidence">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark audit evidence test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">S.2</span><span class="level advanced">Advanced</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Inspect the activity log and Windows Event Log</h3>
+              <p class="test-body">Complete at least one permission toggle and one enforcement event first. Use an elevated PowerShell prompt because ProgramData is ACL-restricted.</p>
+              <details class="command">
+                <summary>PowerShell: inspect audit and service evidence</summary>
+                <div class="code-wrap"><pre><code>Get-Content 'C:\ProgramData\PlaygroundControl\audit.jsonl' -Tail 15
+
+Get-WinEvent -ProviderName PlaygroundControl -MaxEvents 15 |
+  Select-Object TimeCreated, Id, LevelDisplayName, Message |
+  Format-Table -Wrap
+
+Get-Content 'C:\ProgramData\PlaygroundControl\service.log' -Tail 15</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Audit JSON lines show permission changes, game changes, login failures, and closure events with timestamps and source IPs. Event Viewer shows service start/stop and errors. No PIN, setup token, or session token appears in any log.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="standard-user" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="standard-user">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark standard-user privilege test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">S.3</span><span class="level advanced">Advanced</span><span class="time">5 min</span></div>
+              <h3 class="test-title">Confirm the player account cannot stop the service or read its data</h3>
+              <p class="test-body">Sign in as the standard player account. Try <code>Stop-Service PlaygroundControl</code> and open <code>services.msc</code>. The operation must be refused without administrator approval. Also try reading <code>C:\ProgramData\PlaygroundControl</code>; access should be denied.</p>
+              <details class="command">
+                <summary>Standard-user PowerShell expectations</summary>
+                <div class="code-wrap"><pre><code>Stop-Service PlaygroundControl
+# Expected: Access is denied / Administrator permission required
+
+Get-Content 'C:\ProgramData\PlaygroundControl\auth.json'
+# Expected: Access is denied
+
+Get-ChildItem 'C:\ProgramData\PlaygroundControl'
+# Expected: Access is denied</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Standard-user attempts fail. This supports the documented threat model: a non-admin player cannot trivially stop the service or edit PIN/config data. A Windows administrator can always override the system.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="firewall-lan-only" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="firewall-lan-only">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark firewall-LAN-only test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">S.4</span><span class="level advanced">Advanced</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Inspect the firewall scope and network profile behavior</h3>
+              <p class="test-body">The installed rule should allow TCP 8080 only on the private profile and only from the local subnet. If your LAN is marked Public, the rule will not apply. Verify the rule's scope and that the app does not require Internet access.</p>
+              <details class="command">
+                <summary>PowerShell: inspect firewall scope</summary>
+                <div class="code-wrap"><pre><code>$rule = Get-NetFirewallRule -DisplayName 'Playground Control'
+$rule | Select-Object DisplayName, Enabled, Direction, Action, Profile
+$rule | Get-NetFirewallAddressFilter | Format-List LocalAddress, RemoteAddress
+$rule | Get-NetFirewallPortFilter | Format-List Protocol, LocalPort, RemotePort
+Get-NetConnectionProfile | Select-Object Name, NetworkCategory</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Rule enabled, inbound, allow, TCP 8080, Private profile, local-subnet scope. The computer's active LAN profile is Private. No public/Internet exposure is configured.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="uninstall">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 5</p>
+          <h2>Uninstall and cleanup</h2>
+          <p>This is destructive by design. It removes all settings, including the PIN and audit history. Run it last.</p>
+        </div>
+        <span class="section-count">2 tests</span>
+      </div>
+
+      <div class="callout danger" style="margin-bottom:16px">
+        <span class="callout-icon" aria-hidden="true">!</span>
+        <p><strong>Destructive step.</strong> Export any test report or logs you need first. If you want to keep the game list, do not uninstall until the test is complete.</p>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">05</span>
+          <div><h3>Remove the app and verify no leftovers</h3><p>The uninstaller stops the service, removes artifacts, and schedules its temporary copy for cleanup.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="uninstall-run" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="uninstall-run">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark uninstall execution complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">U.1</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
+              <h3 class="test-title">Uninstall from Windows Settings or the EXE</h3>
+              <p class="test-body">Use <strong>Settings &gt; Apps &gt; Installed apps &gt; Playground Control &gt; Uninstall</strong>, or run the installed EXE with <code>--uninstall</code> from an elevated prompt. Approve UAC and the confirmation dialog.</p>
+              <details class="command">
+                <summary>PowerShell: direct uninstall path</summary>
+                <div class="code-wrap"><pre><code>&amp; 'C:\Program Files\PlaygroundControl\PlaygroundControl.exe' --uninstall</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>The uninstaller stops and deletes the service, removes the firewall rule and uninstall entry, removes Program Files and ProgramData, and shows a completion dialog. A temporary uninstaller copy may remain in the user's temp folder until the next reboot.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="uninstall-verify" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="uninstall-verify">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark uninstall cleanup verification complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">U.2</span><span class="level essential">Essential</span><span class="time">2 min</span></div>
+              <h3 class="test-title">Verify no service, firewall rule, program data, or ARP entry remains</h3>
+              <p class="test-body">Run these checks in an elevated PowerShell prompt. It is acceptable for the temp uninstaller to require one reboot to disappear.</p>
+              <details class="command">
+                <summary>PowerShell: post-uninstall leftovers check</summary>
+                <div class="code-wrap"><pre><code>Get-Service PlaygroundControl -ErrorAction SilentlyContinue
+Get-NetFirewallRule -DisplayName 'Playground Control' -ErrorAction SilentlyContinue
+Test-Path 'C:\Program Files\PlaygroundControl'
+Test-Path 'C:\ProgramData\PlaygroundControl'
+Test-Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlaygroundControl'
+Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>No service, no firewall rule, both paths are <code>False</code>, the uninstall registry key is absent, and nothing listens on 8080. Reboot once and confirm the temporary uninstaller is cleaned up.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="troubleshooting">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Reference</p>
+          <h2>Troubleshooting the test run</h2>
+          <p>Use these checks before treating a failure as a product defect. Localized Windows messages may differ slightly.</p>
+        </div>
+        <span class="section-count">Reference</span>
+      </div>
+      <div class="trouble-wrap">
+        <table class="trouble">
+          <thead><tr><th>Symptom</th><th>Check</th><th>Resolution</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>SmartScreen says Windows protected your PC</td>
+              <td>Hash must match the artifact card. The EXE is unsigned.</td>
+              <td>Verify SHA-256. In a test environment choose <strong>More info &gt; Run anyway</strong>, or sign the release first with the Makefile <code>sign</code> target.</td>
+            </tr>
+            <tr>
+              <td>Setup page did not open</td>
+              <td>Service running? Port 8080 listening? Browser blocked pop-up?</td>
+              <td>Run <code>&amp; 'C:\Program Files\PlaygroundControl\PlaygroundControl.exe' --setup</code> from an elevated prompt. It generates a fresh local setup link.</td>
+            </tr>
+            <tr>
+              <td>Setup link says token is invalid or expired</td>
+              <td>Setup tokens expire after 15 minutes and are single-use.</td>
+              <td>Regenerate with <code>--setup</code>. Initial setup must be done on the PC at <code>127.0.0.1</code>, not from a phone.</td>
+            </tr>
+            <tr>
+              <td>Phone cannot reach the dashboard</td>
+              <td>Same subnet? Network profile Private? Firewall rule present? Router client isolation enabled?</td>
+              <td>Use the PC IPv4 URL, set the Wi-Fi network to Private, and inspect the firewall rule. Guest Wi-Fi often isolates clients.</td>
+            </tr>
+            <tr>
+              <td>Browser returns 421 Misdirected Request</td>
+              <td>The Host header does not match a local IP, hostname, localhost, or 127.0.0.1.</td>
+              <td>Use the dashboard URL shown in <strong>Access and security</strong>, or the PC's machine name/secondary IP. Do not use an arbitrary DNS alias.</td>
+            </tr>
+            <tr>
+              <td>Installer says port 8080 is already in use</td>
+              <td>Another web server or leftover process owns TCP 8080.</td>
+              <td>Find it with <code>Get-NetTCPConnection -LocalPort 8080</code>, stop that program, then rerun the installer.</td>
+            </tr>
+            <tr>
+              <td>Notepad does not close while blocked</td>
+              <td>Was the exact System32 Notepad launched? Is the configured executable exactly <code>notepad.exe</code>? View Recent activity.</td>
+              <td>Launch <code>"$env:SystemRoot\System32\notepad.exe"</code> explicitly. Store/UWP apps are outside the supported guarantee.</td>
+            </tr>
+            <tr>
+              <td>Game runs for up to 10 seconds while blocked</td>
+              <td>This is the designed clean-close grace period for a process with no responsive window.</td>
+              <td>Wait for the force-close fallback. Check for a <strong>Force-closed</strong> event. Anti-cheat-protected processes may refuse termination.</td>
+            </tr>
+            <tr>
+              <td>Pin change or game action returns 403</td>
+              <td>Session expired, the service restarted, or the browser lost its CSRF state.</td>
+              <td>Reload the dashboard and sign in again. Service restarts invalidate in-memory sessions.</td>
+            </tr>
+            <tr>
+              <td>PIN is forgotten</td>
+              <td>The PIN cannot be recovered, only reset.</td>
+              <td>Run the installed EXE with <code>--reset-admin</code> from an elevated prompt. Games and permission state are preserved.</td>
+            </tr>
+            <tr>
+              <td>Service will not start</td>
+              <td>Check service status, Event Viewer, service.log, and the ProgramData ACL.</td>
+              <td>Use <code>Get-WinEvent -ProviderName PlaygroundControl</code>. Reinstall if the service registration is missing or corrupt; uninstall first.</td>
+            </tr>
+            <tr>
+              <td>Uninstall is incomplete</td>
+              <td>Files may be locked by a running instance; the EXE may already be gone.</td>
+              <td>Reboot, then remove any remaining service/firewall rule or rerun the installer/uninstaller. The temp uninstaller is scheduled for reboot cleanup.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="developer-checks">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">For developers</p>
+          <h2>Automated checks and known gaps</h2>
+          <p>These do not replace the Windows acceptance run, but they catch most regressions quickly on Linux or in CI.</p>
+        </div>
+        <span class="section-count">Dev</span>
+      </div>
+
+      <div class="dev-grid">
+        <article class="info-card">
+          <h3>Linux / source checkout</h3>
+          <details class="command" open>
+            <summary>Run the complete local validation pipeline</summary>
+            <div class="code-wrap"><pre><code># Run these commands from the repository root.
+make check
+make security
+go test -race ./...
+make build
+sha256sum dist/PlaygroundControl.exe</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+          </details>
+          <p style="margin-top:10px"><code>make check</code> runs module verification, vet, portable tests, formatting, JavaScript syntax checking, and Windows-target vet. <code>make security</code> requires the documented external scanners. <code>go test -race</code> catches shared-state defects. <code>make build</code> produces the single GUI EXE.</p>
+        </article>
+
+        <article class="info-card">
+          <h3>Windows-compiled tests under Wine</h3>
+          <details class="command" open>
+            <summary>Compile and execute each Windows test suite</summary>
+            <div class="code-wrap"><pre><code># Run these commands from the repository root.
+for pkg in protection model store auth enforce server platform windowsapp; do
+  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+    go test -c -o "/tmp/pc-$pkg.test.exe" "./internal/$pkg"
+  WINEDEBUG=-all wine "/tmp/pc-$pkg.test.exe" -test.count=1
+done</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+          </details>
+          <p style="margin-top:10px">The platform suite includes a real process enumeration/kill test using process creation time, IFEO guard checks, and a Notepad graceful-close test. The server suite exercises the API, cookies, setup flow, headers, and network checks.</p>
+        </article>
+
+        <article class="info-card">
+          <h3>Automated coverage</h3>
+          <ul class="coverage-list">
+            <li>Game validation, path matching, and critical-process rejection</li>
+            <li>Config persistence, backup recovery, fail-closed defaults, and audit rotation</li>
+            <li>PIN hashing, setup token consumption/expiry, lockout, sessions, and PIN changes</li>
+            <li>Close-request / 10-second force-close state machine and cancellation rules</li>
+            <li>API authorization, CSRF, origin/Host checks, setup-only-loopback, and cookies</li>
+            <li>Mandatory Roblox image list, renamed-process path detection, and guarded toggle failure behavior</li>
+            <li>Windows IFEO guard set/remove in both registry views, with restoration of any pre-existing debugger</li>
+            <li>Windows process safety: PID-plus-creation identity and graceful WM_CLOSE</li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <h3>Known validation gap</h3>
+          <p>Full UAC elevation, Windows SCM service installation, firewall rule application, ACL application, Add/Remove Programs, IFEO launch interception, and reboot behavior were not executable in this Linux workspace. The IFEO set/restore logic is exercised under Wine, but the actual Windows loader interception requires a real Windows 10/11 x64 acceptance run.</p>
+          <p>The EXE is currently unsigned. Signing is supported, for example:</p>
+          <div class="code-wrap" style="margin-top:8px"><pre><code># Set CERT_PASSWORD in your environment; never commit signing material.
+make sign SIGN_CMD='signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx /p &quot;$CERT_PASSWORD&quot;'</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="report">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Record</p>
+          <h2>Produce a test report</h2>
+          <p>Add context and notes, then export a Markdown report containing every checklist result. Sensitive values such as PINs are never requested here.</p>
+        </div>
+        <span class="section-count">Optional</span>
+      </div>
+      <div class="report-card">
+        <div class="report-grid">
+          <div class="field">
+            <label for="testerName">Tester</label>
+            <input id="testerName" type="text" autocomplete="name" placeholder="Name or initials">
+          </div>
+          <div class="field">
+            <label for="testMachine">Machine / Windows build</label>
+            <input id="testMachine" type="text" autocomplete="off" placeholder="VM name, Windows 11 24H2">
+          </div>
+          <div class="field">
+            <label for="testDate">Test date</label>
+            <input id="testDate" type="date">
+          </div>
+          <div class="field">
+            <label for="testResult">Overall result</label>
+            <select id="testResult" style="width:100%;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:#fff;color:var(--ink)">
+              <option value="Not run">Not run</option>
+              <option value="Pass">Pass</option>
+              <option value="Pass with notes">Pass with notes</option>
+              <option value="Fail">Fail</option>
+              <option value="Blocked">Blocked</option>
+            </select>
+          </div>
+          <div class="field wide">
+            <label for="testNotes">Notes, defects, and observations</label>
+            <textarea id="testNotes" placeholder="Include unexpected behavior, Windows messages, audit event observations, and any test environment caveats."></textarea>
+          </div>
+        </div>
+        <div class="report-actions">
+          <button class="button dark" type="button" id="exportReport">Export Markdown report</button>
+          <button class="button outline" type="button" id="copySummary">Copy summary</button>
+          <button class="button outline" type="button" id="printButton2">Print / save PDF</button>
+        </div>
+        <p class="hint" style="margin:11px 0 0;color:var(--muted);font-size:.78rem">Checklist state, tester details, and notes are stored only in this browser's local storage for this file. Nothing is sent to a server.</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>Playground Control v1.0.0 acceptance guide. Generated for the current release artifact.</p>
+      <p>This page is self-contained and does not load remote fonts, scripts, images, or analytics. Use Print / save PDF for an offline copy.</p>
+    </footer>
+  </main>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  const STORAGE_KEY = "playground-control-test-guide-v1";
+  const allTests = Array.from(document.querySelectorAll(".test-card[data-test]"));
+  const checkboxes = Array.from(document.querySelectorAll(".test-checkbox[data-test]"));
+  const advancedCards = Array.from(document.querySelectorAll('.test-card[data-level="advanced"]'));
+  const copyButtons = Array.from(document.querySelectorAll("[data-copy-target]"));
+  const toast = document.getElementById("toast");
+  let toastTimer = 0;
+  let essentialsOnly = false;
+
+  const $ = (id) => document.getElementById(id);
+
+  function safeStorageGet(key) {
+    try { return window.localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function safeStorageSet(key, value) {
+    try { window.localStorage.setItem(key, value); } catch (_) { /* file:// / privacy mode */ }
+  }
+  function safeStorageRemove(key) {
+    try { window.localStorage.removeItem(key); } catch (_) { /* ignore */ }
+  }
+
+  function loadState() {
+    let state = {};
+    try { state = JSON.parse(safeStorageGet(STORAGE_KEY) || "{}") || {}; } catch (_) { state = {}; }
+    for (const checkbox of checkboxes) {
+      checkbox.checked = Boolean(state.checks && state.checks[checkbox.dataset.test]);
+    }
+    if (state.fields) {
+      for (const id of ["testerName", "testMachine", "testDate", "testResult", "testNotes"]) {
+        const field = $(id);
+        if (field && state.fields[id] !== undefined) field.value = state.fields[id];
+      }
+    }
+    if (state.essentialsOnly !== undefined) {
+      setEssentialsOnly(Boolean(state.essentialsOnly), false);
+    }
+    updateProgress();
+  }
+
+  function saveState() {
+    const fields = {};
+    for (const id of ["testerName", "testMachine", "testDate", "testResult", "testNotes"]) {
+      const field = $(id);
+      if (field) fields[id] = field.value;
+    }
+    const checks = {};
+    for (const checkbox of checkboxes) {
+      if (checkbox.checked) checks[checkbox.dataset.test] = true;
+    }
+    safeStorageSet(STORAGE_KEY, JSON.stringify({ checks, fields, essentialsOnly }));
+    $("savedIndicator").textContent = "Saved locally";
+    window.clearTimeout(saveState.timer);
+    saveState.timer = window.setTimeout(() => { $("savedIndicator").textContent = "Progress saves locally"; }, 1600);
+  }
+
+  function visibleChecks() {
+    return checkboxes.filter((cb) => !cb.closest(".test-card").classList.contains("filtered-out"));
+  }
+
+  function updateProgress() {
+    const visible = visibleChecks();
+    const done = visible.filter((cb) => cb.checked).length;
+    const total = visible.length;
+    const percent = total ? Math.round((done / total) * 100) : 0;
+    $("doneCount").textContent = String(done);
+    $("totalCount").textContent = String(total);
+    $("progressBar").style.width = percent + "%";
+    $("navProgressBar").style.width = percent + "%";
+    $("navProgressText").textContent = done + " / " + total;
+  }
+
+  function setEssentialsOnly(enabled, persist) {
+    essentialsOnly = enabled;
+    const button = $("essentialsButton");
+    button.setAttribute("aria-pressed", String(enabled));
+    button.textContent = enabled ? "Showing essentials" : "Essentials only";
+    for (const card of advancedCards) {
+      card.classList.toggle("filtered-out", enabled);
+      card.hidden = enabled;
+    }
+    updateProgress();
+    if (persist) saveState();
+  }
+
+  function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add("show");
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove("show"), 1900);
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Copied to clipboard.");
+      return;
+    } catch (_) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        showToast("Copied to clipboard.");
+      } catch (_) {
+        showToast("Copy failed. Select the text manually.");
+      }
+      textarea.remove();
+    }
+  }
+
+  function copyFromButton(button) {
+    const selector = button.dataset.copyTarget;
+    const target = selector ? document.querySelector(selector) : button.closest(".code-wrap")?.querySelector("pre code");
+    if (!target) return;
+    copyText(target.textContent || "");
+  }
+
+  function markReportTimestamp() {
+    const dateField = $("testDate");
+    if (dateField && !dateField.value) {
+      const now = new Date();
+      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+      dateField.value = local.toISOString().slice(0, 10);
+      saveState();
+    }
+  }
+
+  function buildReport() {
+    const lines = [];
+    const tester = $("testerName").value.trim() || "Unspecified tester";
+    const machine = $("testMachine").value.trim() || "Unspecified machine";
+    const date = $("testDate").value || new Date().toISOString().slice(0, 10);
+    const overall = $("testResult").value || "Not run";
+    const done = checkboxes.filter((cb) => cb.checked).length;
+    const notes = $("testNotes").value.trim();
+    lines.push("# Playground Control acceptance test report");
+    lines.push("");
+    lines.push("- **Tester:** " + tester);
+    lines.push("- **Machine / Windows build:** " + machine);
+    lines.push("- **Date:** " + date);
+    lines.push("- **Overall result:** " + overall);
+    lines.push("- **Checklist:** " + done + " of " + checkboxes.length + " items complete");
+    lines.push("- **Artifact SHA-256:** `25d55e728f94cb221a40173c3af5bcde0516bc4e6dcdd51068eb6160d08d1ecb`");
+    lines.push("");
+    lines.push("## Checklist");
+    lines.push("");
+    const groups = [
+      ["before-you-begin", "Before you begin"],
+      ["install", "Installation"],
+      ["first-run", "First run and PIN"],
+      ["enforcement", "Play enforcement"],
+      ["lan-security", "LAN and security"],
+      ["uninstall", "Uninstall"]
+    ];
+    for (const [sectionId, heading] of groups) {
+      const section = document.getElementById(sectionId);
+      const cards = Array.from(section.querySelectorAll(".test-card[data-test]"));
+      lines.push("### " + heading);
+      lines.push("");
+      for (const card of cards) {
+        const cb = card.querySelector(".test-checkbox");
+        const id = card.querySelector(".test-id")?.textContent || "?";
+        const title = card.querySelector(".test-title")?.textContent || "Untitled";
+        const level = card.querySelector(".level")?.textContent || "";
+        lines.push("- [" + (cb.checked ? "x" : " ") + "] **" + id + "** " + title + " _(" + level + ")_");
+      }
+      lines.push("");
+    }
+    lines.push("## Notes");
+    lines.push("");
+    lines.push(notes || "_No notes recorded._");
+    lines.push("");
+    lines.push("## Known validation limits");
+    lines.push("");
+    lines.push("- Unsigned test artifact; SmartScreen may warn.");
+    lines.push("- Full UAC/SCM/firewall/ACL/reboot acceptance requires a real Windows 10/11 x64 machine.");
+    lines.push("- Enforcement is process-image based; anti-cheat and UWP games are outside the guarantee.");
+    return lines.join("\n") + "\n";
+  }
+
+  function downloadReport() {
+    markReportTimestamp();
+    safeStateSaveBeforeExport();
+    const report = buildReport();
+    const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "playground-control-test-report-" + ($("testDate").value || "undated") + ".md";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("Test report downloaded.");
+  }
+
+  function safeStateSaveBeforeExport() {
+    saveState();
+  }
+
+  function copySummary() {
+    const done = checkboxes.filter((cb) => cb.checked).length;
+    const summary = [
+      "Playground Control acceptance test",
+      "Result: " + ($("testResult").value || "Not run"),
+      "Checklist: " + done + "/" + checkboxes.length,
+      "Tester: " + ($("testerName").value.trim() || "unspecified"),
+      "Machine: " + ($("testMachine").value.trim() || "unspecified"),
+      "Date: " + ($("testDate").value || new Date().toISOString().slice(0, 10))
+    ].join("\n");
+    copyText(summary);
+  }
+
+  function buildLANURL() {
+    const input = $("lanIPInput");
+    const raw = input.value.trim();
+    const octets = raw.split(".");
+    const valid = octets.length === 4 && octets.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+    if (!valid) {
+      showToast("Enter a valid IPv4 address, for example 192.168.1.50.");
+      input.focus();
+      return;
+    }
+    $("lanURLOutput").firstChild.nodeValue = "http://" + raw + ":8080";
+  }
+
+  function initNavObserver() {
+    const sections = Array.from(document.querySelectorAll("main section[id]"));
+    const links = Array.from(document.querySelectorAll(".top-nav a, .side-nav a"));
+    if (!("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const id = entry.target.id;
+        for (const link of links) {
+          link.classList.toggle("active", link.getAttribute("href") === "#" + id);
+        }
+      }
+    }, { rootMargin: "-96px 0px -70% 0px", threshold: 0.01 });
+    sections.forEach((section) => observer.observe(section));
+  }
+
+  $("essentialsButton").addEventListener("click", () => setEssentialsOnly(!essentialsOnly, true));
+  $("resetButton").addEventListener("click", () => {
+    if (!window.confirm("Reset every checklist item, tester field, and notes field in this browser?")) return;
+    safeStorageRemove(STORAGE_KEY);
+    for (const checkbox of checkboxes) checkbox.checked = false;
+    for (const id of ["testerName", "testMachine", "testDate", "testResult", "testNotes"]) {
+      const field = $(id);
+      if (field) field.value = id === "testResult" ? "Not run" : "";
+    }
+    setEssentialsOnly(false, false);
+    updateProgress();
+    showToast("Test guide reset.");
+  });
+
+  for (const checkbox of checkboxes) {
+    checkbox.addEventListener("change", () => { updateProgress(); saveState(); });
+  }
+  for (const id of ["testerName", "testMachine", "testDate", "testResult", "testNotes"]) {
+    const field = $(id);
+    field.addEventListener("input", saveState);
+    field.addEventListener("change", saveState);
+  }
+
+  copyButtons.forEach((button) => button.addEventListener("click", () => copyFromButton(button)));
+  document.querySelectorAll(".copy-code").forEach((button) => button.addEventListener("click", () => copyFromButton(button)));
+  $("lanBuildButton").addEventListener("click", buildLANURL);
+  $("lanIPInput").addEventListener("keydown", (event) => { if (event.key === "Enter") buildLANURL(); });
+  $("printButton").addEventListener("click", () => window.print());
+  $("printButton2").addEventListener("click", () => window.print());
+  $("exportReport").addEventListener("click", downloadReport);
+  $("copySummary").addEventListener("click", copySummary);
+
+  markReportTimestamp();
+  loadState();
+  initNavObserver();
+})();
+</script>
+</body>
+</html>

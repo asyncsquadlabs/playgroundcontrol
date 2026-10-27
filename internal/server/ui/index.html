@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17324d">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Playground Control</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Local game control</p>
+        <h1>Playground Control</h1>
+      </div>
+      <span id="versionLabel" class="version"></span>
+    </header>
+
+    <main>
+      <div id="notice" class="notice" role="alert" aria-live="polite" hidden></div>
+
+      <section id="loadingView" class="panel single-panel" aria-live="polite">
+        <h2>Connecting</h2>
+        <p>Checking this server's local setup state.</p>
+      </section>
+
+      <section id="setupView" class="panel single-panel" hidden>
+        <p class="eyebrow">First run</p>
+        <h2>Set up the administrator PIN</h2>
+        <p id="setupLocalCopy">Initial setup must be completed on the gaming PC. Double-click the installed PlaygroundControl.exe and approve the Windows administrator prompt to create a fresh setup link.</p>
+        <div id="setupFormWrap" hidden>
+          <form id="setupForm" novalidate>
+            <div id="setupTokenWrap">
+              <label for="setupToken">One-time setup token</label>
+              <input id="setupToken" name="setupToken" type="password" autocomplete="off" spellcheck="false" required>
+            </div>
+            <label for="setupPin">New PIN</label>
+            <input id="setupPin" name="setupPin" type="password" inputmode="numeric" autocomplete="new-password" minlength="6" maxlength="12" pattern="[0-9]{6,12}" required>
+            <p class="hint">Use 6 to 12 digits. The PIN is required to change play permission or configuration.</p>
+            <label for="setupPinConfirm">Confirm PIN</label>
+            <input id="setupPinConfirm" name="setupPinConfirm" type="password" inputmode="numeric" autocomplete="new-password" minlength="6" maxlength="12" pattern="[0-9]{6,12}" required>
+            <button type="submit" class="primary">Save PIN and continue</button>
+          </form>
+        </div>
+        <p class="hint">This page accepts setup only from this computer. A phone or another LAN device cannot claim the administrator PIN.</p>
+      </section>
+
+      <section id="loginView" class="panel single-panel" hidden>
+        <p class="eyebrow">Restricted access</p>
+        <h2>Parent sign-in</h2>
+        <p>Enter the administrator PIN to manage play permission and the game list.</p>
+        <form id="loginForm" novalidate>
+          <label for="loginPin">PIN</label>
+          <input id="loginPin" name="loginPin" type="password" inputmode="numeric" autocomplete="current-password" minlength="6" maxlength="12" pattern="[0-9]{6,12}" required>
+          <button type="submit" class="primary">Sign in</button>
+        </form>
+        <p class="hint">After five incorrect attempts, this device is locked out for 15 minutes.</p>
+      </section>
+
+      <section id="dashboardView" hidden>
+        <section id="statusPanel" class="panel status-panel" aria-live="polite">
+          <div class="status-copy">
+            <p class="eyebrow">Game permission</p>
+            <h2 id="statusTitle">Play is blocked</h2>
+            <p id="statusDetail">Roblox is launch-blocked and configured games are closed while play is off.</p>
+          </div>
+          <button id="toggleButton" class="primary" type="button">Allow play</button>
+        </section>
+
+        <div id="dashboardWarnings" class="warning-stack"></div>
+
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Game protection</h2>
+              <span id="gameCount" class="count"></span>
+            </div>
+
+            <section class="builtin-guard" aria-labelledby="builtinGuardTitle">
+              <div class="builtin-guard-heading">
+                <div>
+                  <h3 id="builtinGuardTitle">Roblox guard</h3>
+                  <p>Built in and always managed while play is off</p>
+                </div>
+                <span id="launchGuardBadge" class="guard-badge">Armed</span>
+              </div>
+              <p class="hint">Windows intercepts these Roblox launchers before the game process can start. This protection is not editable from the dashboard.</p>
+              <div id="builtinGamesList" class="guard-chip-list"></div>
+            </section>
+
+            <h3 class="subsection-title">Additional games</h3>
+            <div id="gamesList" class="item-list"></div>
+            <p id="gamesEmpty" class="empty" hidden>No additional games are configured. Roblox protection is still active.</p>
+            <form id="gameForm" class="compact-form" novalidate>
+              <h3>Add another game</h3>
+              <label for="gameName">Display name</label>
+              <input id="gameName" name="gameName" type="text" maxlength="80" autocomplete="off" placeholder="Example game" required>
+              <label for="gameExecutable">Executable name</label>
+              <input id="gameExecutable" name="gameExecutable" type="text" maxlength="255" autocomplete="off" spellcheck="false" placeholder="game.exe" required>
+              <label for="gamePath">Full executable path <span class="optional">optional</span></label>
+              <input id="gamePath" name="gamePath" type="text" maxlength="32767" autocomplete="off" spellcheck="false" placeholder="C:\Games\Example\game.exe">
+              <p class="hint">The executable name is required. Add a full path only to distinguish games with the same file name. Adding a running game while play is blocked closes it.</p>
+              <button type="submit" class="secondary">Add game</button>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Enforcement now</h2>
+            </div>
+            <div id="enforcementList" class="item-list"></div>
+            <p id="enforcementEmpty" class="empty">No protected games are running.</p>
+            <p class="hint">Roblox is intercepted before launch by the built-in guard. Other protected processes get a clean-close request, then are force-closed after 10 seconds.</p>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Recent activity</h2>
+            <span class="count">Latest 50</span>
+          </div>
+          <div id="eventsList" class="event-list"></div>
+          <p id="eventsEmpty" class="empty" hidden>No activity recorded yet.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Access and security</h2>
+          <p>Open this dashboard from another device on the same private LAN using one of these addresses:</p>
+          <div id="lanUrls" class="url-list"></div>
+          <p class="hint">If the addresses do not load, set this computer's network profile to Private and allow Playground Control through Windows Firewall on private networks. This service is not designed for the public Internet.</p>
+          <p class="hint">If the administrator PIN is lost, run <code>PlaygroundControl.exe --reset-admin</code> from an elevated prompt on this PC. The game list, permission state, and activity history are preserved.</p>
+
+          <details class="pin-details">
+            <summary>Change administrator PIN</summary>
+            <form id="pinForm" class="compact-form" novalidate>
+              <label for="currentPin">Current PIN</label>
+              <input id="currentPin" name="currentPin" type="password" inputmode="numeric" autocomplete="current-password" minlength="6" maxlength="12" required>
+              <label for="newPin">New PIN</label>
+              <input id="newPin" name="newPin" type="password" inputmode="numeric" autocomplete="new-password" minlength="6" maxlength="12" pattern="[0-9]{6,12}" required>
+              <label for="newPinConfirm">Confirm new PIN</label>
+              <input id="newPinConfirm" name="newPinConfirm" type="password" inputmode="numeric" autocomplete="new-password" minlength="6" maxlength="12" required>
+              <button type="submit" class="secondary">Change PIN</button>
+            </form>
+          </details>
+
+          <button id="logoutButton" class="text-button" type="button">Sign out</button>
+        </section>
+
+        <section class="limitations">
+          <h2>Enforcement limits</h2>
+          <p>The built-in Roblox guard blocks known Roblox player and launcher images before launch, and the enforcement loop also recognizes processes running from Roblox install directories. It is a household control, not a kernel-level security boundary. An administrator can disable the service or remove its guard. Renaming or copying Roblox outside its install directories, unlisted future launchers, and administrator-level tampering can evade the protection. Microsoft Store package internals and protected anti-cheat behavior cannot be fully guaranteed.</p>
+        </section>
+      </section>
+
+      <noscript>
+        <section class="panel single-panel">
+          <h2>JavaScript is required</h2>
+          <p>Enable JavaScript in this browser to use the Playground Control dashboard.</p>
+        </section>
+      </noscript>
+    </main>
+
+    <footer>
+      <span>Local network only</span>
+      <span>No cloud service or telemetry</span>
+    </footer>
+  </div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
