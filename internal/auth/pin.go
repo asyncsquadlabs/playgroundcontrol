@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -71,6 +72,18 @@ func HashPIN(pin string) (Record, error) {
 		KeyLen:    argonKeyLen,
 		UpdatedAt: time.Now().UTC(),
 	}, nil
+}
+
+// DecodeRecord parses and validates a legacy authentication record.
+func DecodeRecord(data []byte) (Record, error) {
+	var record Record
+	if err := json.Unmarshal(data, &record); err != nil {
+		return Record{}, fmt.Errorf("%w: %v", ErrBadAuth, err)
+	}
+	if !record.valid() {
+		return Record{}, ErrBadAuth
+	}
+	return record, nil
 }
 
 func (r Record) valid() bool {

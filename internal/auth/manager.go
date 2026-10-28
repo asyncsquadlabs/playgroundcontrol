@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,7 +16,6 @@ import (
 )
 
 const (
-	AuthFileName       = "auth.json"
 	SetupTokenFileName = "setup.token"
 
 	setupTokenLifetime = 15 * time.Minute
@@ -36,6 +34,13 @@ var (
 	ErrInvalidSession = errors.New("session is missing or expired")
 	ErrSetupToken     = errors.New("setup token is invalid or expired")
 )
+
+// RecordStore persists the single authentication record. The store package
+// implements this interface.
+type RecordStore interface {
+	LoadAuthRecord() (Record, bool, error)
+	SaveAuthRecord(Record) error
+}
 
 // LockedError reports a temporary login lock for one source IP.
 type LockedError struct {
@@ -66,72 +71,54 @@ type Session struct {
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	dir       string
-	authPath  string
 	tokenPath string
 	now       func() time.Time
+	records   RecordStore
 
 	mu          sync.Mutex
 	record      *Record
-	loadNotice  string
 	setupToken  string
 	setupExpiry time.Time
 	sessions    map[string]*session
 	attempts    map[string]*attempt
 }
 
-// Open loads the PIN record if present. A corrupt or unreadable record is
-// treated as not configured; setup remains token- and loopback-protected.
-func Open(dir string, now func() time.Time) (*Manager, error) {
+// Open loads the PIN record through records. A missing record means initial
+// setup is required. A present but invalid record is a startup error rather
+// than an invitation to replace the PIN silently.
+func Open(dir string, records RecordStore, now func() time.Time) (*Manager, error) {
 	if now == nil {
 		now = time.Now
+	}
+	if records == nil {
+		return nil, errors.New("authentication record store is required")
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create auth directory: %w", err)
 	}
 	m := &Manager{
-		dir:       dir,
-		authPath:  filepath.Join(dir, AuthFileName),
 		tokenPath: filepath.Join(dir, SetupTokenFileName),
 		now:       now,
+		records:   records,
 		sessions:  make(map[string]*session),
 		attempts:  make(map[string]*attempt),
 	}
-	m.load()
-	return m, nil
-}
-
-func (m *Manager) load() {
-	data, err := os.ReadFile(m.authPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return
-	}
+	record, ok, err := records.LoadAuthRecord()
 	if err != nil {
-		m.loadNotice = fmt.Sprintf("auth.json could not be read: %v", err)
-		return
+		return nil, fmt.Errorf("load authentication record: %w", err)
 	}
-	var record Record
-	if err := json.Unmarshal(data, &record); err != nil {
-		m.loadNotice = fmt.Sprintf("auth.json could not be parsed: %v", err)
-		return
+	if ok {
+		if !record.valid() {
+			return nil, ErrBadAuth
+		}
+		m.record = &record
 	}
-	if !record.valid() {
-		m.loadNotice = "auth.json contains invalid authentication parameters"
-		return
-	}
-	m.record = &record
+	return m, nil
 }
 
 // SetupTokenPath is where a fresh setup token is made available to the
 // elevated local installer.
 func (m *Manager) SetupTokenPath() string { return m.tokenPath }
-
-// LoadNotice reports a non-fatal authentication load problem.
-func (m *Manager) LoadNotice() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.loadNotice
-}
 
 // SetupRequired reports whether no valid admin PIN is configured.
 func (m *Manager) SetupRequired() bool {
@@ -200,7 +187,7 @@ func (m *Manager) Setup(token, pin string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomicJSON(m.authPath, record); err != nil {
+	if err := m.records.SaveAuthRecord(record); err != nil {
 		return fmt.Errorf("save PIN: %w", err)
 	}
 	m.record = &record
@@ -208,7 +195,6 @@ func (m *Manager) Setup(token, pin string) error {
 	m.setupExpiry = time.Time{}
 	m.sessions = make(map[string]*session)
 	_ = os.Remove(m.tokenPath)
-	m.loadNotice = ""
 	return nil
 }
 
@@ -338,7 +324,7 @@ func (m *Manager) ChangePIN(currentToken, currentPIN, newPIN string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomicJSON(m.authPath, record); err != nil {
+	if err := m.records.SaveAuthRecord(record); err != nil {
 		return fmt.Errorf("save PIN: %w", err)
 	}
 	m.record = &record
@@ -383,15 +369,6 @@ func randomToken(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func writeFileAtomicJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return writeFileAtomic(path, data, 0o600)
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {

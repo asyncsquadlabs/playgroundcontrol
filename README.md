@@ -10,7 +10,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 
 ## Status
 
-- **Version:** 1.0.0
+- **Version:** 1.1.0
 - **Target:** Windows 10/11 x64
 - **Distribution:** single self-installing EXE
 - **Runtime:** Go 1.26.10 or later required for source builds
@@ -22,7 +22,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 - Embedded responsive LAN dashboard on TCP port 8080.
 - Six to twelve digit administrator PIN hashed with Argon2id.
 - First-run setup restricted to the local PC and a one-time 256-bit token.
-- Persistent play permission and dashboard-managed game list.
+- PIN setup, play permission, game list, and audit history persist across service restarts and Windows reboots in SQLite.
 - **Mandatory Roblox guard** — no Roblox entry is required in the custom list:
   - `RobloxPlayerBeta.exe`
   - `RobloxPlayer.exe`
@@ -35,13 +35,13 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 - Graceful close request, followed by a 10-second grace period and force-close fallback for custom games.
 - PID plus process-creation-time identity checks to avoid terminating reused PIDs.
 - Windows Firewall rule limited to inbound TCP 8080 on the private profile and local subnet.
-- Protected ProgramData storage, audit rotation, login throttling, CSRF protection, security headers, and fail-closed configuration handling.
+- Protected SQLite ProgramData storage, last-known-good database backup, login throttling, CSRF protection, security headers, and fail-closed configuration handling.
 - Recovery commands for setup, PIN reset, and uninstall.
 - One-command test, build, resource, signing, and static-analysis workflows.
 
 ## Quick start (Windows)
 
-1. Download `PlaygroundControl-1.0.0-win-x64.zip` from the repository's Releases page.
+1. Download `PlaygroundControl-1.1.0-win-x64.zip` from the repository's Releases page.
 2. Verify the SHA-256 shown in the release notes.
 3. Extract the ZIP to a local folder.
 4. Run `PlaygroundControl.exe` and approve the UAC prompt. If Windows SmartScreen appears, verify the hash before choosing **More info → Run anyway**.
@@ -49,7 +49,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 6. Open the dashboard from a phone on the same private LAN using the URL shown by setup.
 7. Read [TESTING.html](TESTING.html) for the 23-item acceptance test.
 
-If an earlier build is already installed, uninstall it before running this build. The current installer does not perform in-place upgrades.
+If an earlier build is already installed, uninstall it before running this build. The current installer does not perform in-place upgrades. If you preserve `C:\ProgramData\PlaygroundControl` from a 1.0.x install, the first start imports its JSON/JSONL state into SQLite once and archives the old files as `*.migrated`; a normal uninstall deletes that directory.
 
 ## How it works
 
@@ -60,7 +60,7 @@ Parent phone / LAN browser
 Playground Control service (LocalSystem)
      TCP 8080, private-LAN firewall rule
           │
-          ├── Persistent config + audit log in C:\ProgramData\PlaygroundControl
+          ├── SQLite state + bounded audit history in C:\ProgramData\PlaygroundControl\playground.db
           ├── IFEO launch guard for Roblox while play is off
           └── Process enforcement every 500 ms
                  ├── close request in the player's session
@@ -82,6 +82,8 @@ The service runs in session 0. For graceful closes, it acquires the interactive 
 | Setup token lifetime | 15 minutes, one use |
 | Admin session | 30-minute idle, 12-hour absolute |
 | Login throttle | 5 failures / 15 minutes per source IP |
+| Persistence | SQLite WAL, full synchronous commits, latest-3 corrupt archives |
+| Audit retention | 50,000 newest events |
 
 ## Build from source
 
@@ -127,7 +129,7 @@ internal/model/              Configuration, validation, and audit types
 internal/platform/           Windows process APIs, IFEO guard, close helper
 internal/protection/         Mandatory Roblox image and path policy
 internal/server/             HTTP API, security middleware, embedded dashboard
-internal/store/              Atomic persistence and bounded audit log
+internal/store/              SQLite persistence, recovery, migration, bounded audit log
 internal/windowsapp/         Installer, SCM, firewall, ACL, and recovery modes
 winres/                      Icon, manifest, and version resources
 TESTING.html                 Interactive Windows acceptance runbook
@@ -138,20 +140,22 @@ SECURITY.md                  Threat model, accepted risks, reporting process
 
 The service owns these files under `C:\ProgramData\PlaygroundControl`:
 
-- `config.json` — play state and custom game list
-- `config.json.bak` — last successful configuration backup
-- `auth.json` — Argon2id PIN record
+- `playground.db` — SQLite state: Argon2id PIN record, play permission, custom game list, and bounded audit history
+- `playground.db.bak` — last-known-good SQLite snapshot, refreshed after PIN/config/game changes and on clean shutdown
+- `playground.db-wal` / `playground.db-shm` — SQLite write-ahead log and shared-memory files while the service runs
 - `setup.token` — short-lived one-time setup token when unclaimed
-- `audit.jsonl` / `audit.1.jsonl` — rotating non-secret activity log
 - `service.log` — service diagnostic log
+- `*.migrated` — archived JSON/JSONL files after the one-time upgrade import
 
-The directory is ACL-restricted to SYSTEM and Administrators. It is deleted on uninstall after confirmation, along with the service, firewall rule, PIN, game list, and audit history.
+The database uses WAL mode and full synchronous commits. A corrupt or unreadable primary database is archived with a timestamp suffix, the last-known-good backup is restored when valid, and a fresh setup is offered only when no usable backup exists. The latest three corrupt archives are retained. The directory is ACL-restricted to SYSTEM and Administrators. It is deleted on uninstall after confirmation, along with the service, firewall rule, PIN, game list, and audit history.
+
+Browser sessions remain in memory and do not survive a service or Windows restart. After a reboot, open the dashboard and sign in with the existing PIN; do not create a new one. An unreadable authentication record is a startup error rather than an automatic reset, so `--reset-admin` remains the explicit recovery path.
 
 Local administrator recovery commands:
 
 ```text
 PlaygroundControl.exe --setup         recreate the local setup link
-PlaygroundControl.exe --reset-admin   reset the administrator PIN
+PlaygroundControl.exe --reset-admin   reset the administrator PIN (keeps play state, games, and audit history)
 PlaygroundControl.exe --uninstall     remove the application and its data
 PlaygroundControl.exe --version
 ```
@@ -187,6 +191,7 @@ Automated tests also run under Wine in development for:
 - Real Windows process enumeration and identity-checked termination
 - Graceful `WM_CLOSE` handling
 - IFEO registry guard set/remove and pre-existing debugger restoration
+- SQLite persistence, backup recovery, and one-time JSON migration
 - HTTP API, authentication, CSRF, origin, Host, and security-header checks
 
 A real Windows 10/11 x64 acceptance run is still required before production deployment, particularly for UAC, SCM, firewall, ACL propagation, IFEO launch interception, and reboot recovery.

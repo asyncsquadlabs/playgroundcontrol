@@ -1,20 +1,19 @@
-// Package store owns the persisted play configuration and the bounded audit
-// log. All mutations are serialized and committed to disk before they become
-// visible in memory.
+// Package store owns the persisted play configuration, authentication record,
+// and bounded audit log. All state is held in a single SQLite database. All
+// mutations are serialized and committed to disk before they become visible in
+// memory.
 package store
 
 import (
-	"bufio"
-	"encoding/json"
+	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 )
 
@@ -23,30 +22,30 @@ import (
 var ErrDuplicateGame = errors.New("that executable and path are already configured")
 
 const (
-	configFile     = "config.json"
-	configBackup   = "config.json.bak"
-	auditFile      = "audit.jsonl"
-	auditRotated   = "audit.1.jsonl"
-	auditMaxBytes  = 5 << 20
 	defaultRecent  = 50
 	maxEventLength = 300
 )
 
 // Store is safe for concurrent use.
 type Store struct {
-	dir string
-	now func() time.Time
+	dir        string
+	dbPath     string
+	backupPath string
+	now        func() time.Time
+	db         *sql.DB
 
 	mu         sync.RWMutex
 	cfg        model.Config
 	loadNotice string
 
-	auditMu sync.Mutex
+	auditMu  sync.Mutex
+	backupMu sync.Mutex
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// Open loads the configuration. A missing config creates a fail-closed default.
-// A corrupt config is not overwritten; it is reported through LoadNotice and
-// the service starts blocked. A valid backup is used when possible.
+// Open opens or creates the database in dir and loads the current state.
 func Open(dir string, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
@@ -54,62 +53,55 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	s := &Store{dir: dir, now: now, cfg: model.DefaultConfig()}
-	if err := s.load(); err != nil {
+	s := &Store{
+		dir:        dir,
+		dbPath:     databasePath(dir),
+		backupPath: backupPath(dir),
+		now:        now,
+		cfg:        model.DefaultConfig(),
+	}
+	db, notice, err := s.openDatabase()
+	if err != nil {
 		return nil, err
 	}
+	s.db = db
+	s.loadNotice = notice
+	if err := s.loadConfig(); err != nil {
+		_ = s.db.Close()
+		s.db = nil
+		return nil, err
+	}
+	if err := s.refreshBackup(); err != nil {
+		s.appendNotice(fmt.Sprintf("could not refresh database backup: %v", err))
+	}
 	return s, nil
-}
-
-func (s *Store) load() error {
-	primary, primaryErr := s.readConfig(filepath.Join(s.dir, configFile))
-	if primaryErr == nil {
-		s.cfg = primary
-		return nil
-	}
-	if !errors.Is(primaryErr, os.ErrNotExist) {
-		s.loadNotice = fmt.Sprintf("config.json could not be loaded: %v", primaryErr)
-	} else {
-		s.cfg = model.DefaultConfig()
-		return nil
-	}
-
-	backup, backupErr := s.readConfig(filepath.Join(s.dir, configBackup))
-	if backupErr == nil {
-		s.cfg = backup
-		s.loadNotice = fmt.Sprintf("%s; recovered the last backup", s.loadNotice)
-		return nil
-	}
-
-	s.cfg = model.DefaultConfig()
-	s.loadNotice = fmt.Sprintf("%s; backup was not usable (%v); starting with play blocked", s.loadNotice, backupErr)
-	return nil
-}
-
-func (s *Store) readConfig(path string) (model.Config, error) {
-	data, err := os.ReadFile(path) // #nosec G304 -- callers pass fixed file names under the protected data directory.
-	if err != nil {
-		return model.Config{}, err
-	}
-	var cfg model.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return model.Config{}, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
-	}
-	cfg.Normalize()
-	if err := cfg.Validate(); err != nil {
-		return model.Config{}, fmt.Errorf("validate %s: %w", filepath.Base(path), err)
-	}
-	return cfg, nil
 }
 
 // DataDir returns the directory backing this store.
 func (s *Store) DataDir() string { return s.dir }
 
-// LoadNotice is a human-readable warning from the last load, if any.
+// DatabasePath returns the resolved primary database path.
+func (s *Store) DatabasePath() string { return s.dbPath }
+
+// LoadNotice is a human-readable warning from the last load or recovery, if any.
 func (s *Store) LoadNotice() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.loadNotice
+}
+
+func (s *Store) appendNotice(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadNotice == "" {
+		s.loadNotice = message
+		return
+	}
+	s.loadNotice += "; " + message
 }
 
 // Config returns a copy of the current configuration.
@@ -145,10 +137,29 @@ func (s *Store) SetPlayAllowed(allowed bool, actor string) error {
 	next.PlayAllowed = allowed
 	next.LastChangedAt = s.now().UTC()
 	next.LastChangedBy = actor
-	if err := s.persistConfig(next); err != nil {
+	if err := s.persistPlayState(next); err != nil {
 		return err
 	}
 	s.cfg = next
+	if err := s.refreshBackup(); err != nil {
+		s.loadNotice = appendNoticeText(s.loadNotice, fmt.Sprintf("could not refresh database backup: %v", err))
+	}
+	return nil
+}
+
+func (s *Store) persistPlayState(next model.Config) error {
+	if s.db == nil {
+		return errors.New("database is not open")
+	}
+	_, err := s.db.Exec(
+		`UPDATE app_state SET play_allowed = ?, last_changed_at = ?, last_changed_by = ? WHERE id = 1`,
+		boolInt(next.PlayAllowed),
+		formatTime(next.LastChangedAt),
+		next.LastChangedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("save play permission: %w", err)
+	}
 	return nil
 }
 
@@ -169,12 +180,31 @@ func (s *Store) AddGame(g model.Game) (model.Game, error) {
 		}
 	}
 
+	if s.db == nil {
+		return model.Game{}, errors.New("database is not open")
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO games (id, game_key, name, executable, image_path, added_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		normalized.ID,
+		key,
+		normalized.Name,
+		normalized.Executable,
+		normalized.ImagePath,
+		formatTime(normalized.AddedAt),
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return model.Game{}, ErrDuplicateGame
+		}
+		return model.Game{}, fmt.Errorf("save game: %w", err)
+	}
+
 	next := cloneConfig(s.cfg)
 	next.Games = append(next.Games, normalized)
-	if err := s.persistConfig(next); err != nil {
-		return model.Game{}, err
-	}
 	s.cfg = next
+	if err := s.refreshBackup(); err != nil {
+		s.loadNotice = appendNoticeText(s.loadNotice, fmt.Sprintf("could not refresh database backup: %v", err))
+	}
 	return normalized, nil
 }
 
@@ -184,96 +214,96 @@ func (s *Store) DeleteGame(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	next := cloneConfig(s.cfg)
-	found := false
-	out := next.Games[:0]
-	for _, g := range next.Games {
-		if g.ID == id {
-			found = true
-			continue
-		}
-		out = append(out, g)
+	if s.db == nil {
+		return false, errors.New("database is not open")
 	}
-	if !found {
+	result, err := s.db.Exec(`DELETE FROM games WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete game: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete game: %w", err)
+	}
+	if affected == 0 {
 		return false, nil
 	}
-	next.Games = out
-	if err := s.persistConfig(next); err != nil {
-		return false, err
+
+	next := cloneConfig(s.cfg)
+	out := next.Games[:0]
+	for _, g := range next.Games {
+		if g.ID != id {
+			out = append(out, g)
+		}
 	}
+	next.Games = out
 	s.cfg = next
+	if err := s.refreshBackup(); err != nil {
+		s.loadNotice = appendNoticeText(s.loadNotice, fmt.Sprintf("could not refresh database backup: %v", err))
+	}
 	return true, nil
 }
 
-func (s *Store) persistConfig(cfg model.Config) error {
-	cfg.Normalize()
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("refuse to persist invalid configuration: %w", err)
+func (s *Store) loadConfig() error {
+	if s.db == nil {
+		return errors.New("database is not open")
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode configuration: %w", err)
+	var play int
+	var lastChangedAt, lastChangedBy sql.NullString
+	if err := s.db.QueryRow(
+		`SELECT play_allowed, last_changed_at, last_changed_by FROM app_state WHERE id = 1`,
+	).Scan(&play, &lastChangedAt, &lastChangedBy); err != nil {
+		return fmt.Errorf("load play state: %w", err)
 	}
-	data = append(data, '\n')
 
-	current := filepath.Join(s.dir, configFile)
-	backup := filepath.Join(s.dir, configBackup)
-	if old, err := os.ReadFile(current); err == nil { // #nosec G304 -- fixed config file name under the protected data directory.
-		if err := writeFileAtomic(backup, old, 0o600); err != nil {
-			return fmt.Errorf("back up configuration: %w", err)
+	cfg := model.DefaultConfig()
+	cfg.PlayAllowed = play != 0
+	cfg.LastChangedAt = parseTime(lastChangedAt.String)
+	cfg.LastChangedBy = lastChangedBy.String
+
+	rows, err := s.db.Query(`SELECT id, name, executable, image_path, added_at FROM games ORDER BY added_at, id`)
+	if err != nil {
+		return fmt.Errorf("load games: %w", err)
+	}
+	defer rows.Close()
+	var warnings []string
+	for rows.Next() {
+		var game model.Game
+		var addedAt string
+		if err := rows.Scan(&game.ID, &game.Name, &game.Executable, &game.ImagePath, &addedAt); err != nil {
+			return fmt.Errorf("load game: %w", err)
 		}
+		game.AddedAt = parseTime(addedAt)
+		normalized, err := model.NormalizeGame(game)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("ignored invalid saved game %q: %v", game.Name, err))
+			continue
+		}
+		cfg.Games = append(cfg.Games, normalized)
 	}
-	if err := writeFileAtomic(current, data, 0o600); err != nil {
-		return fmt.Errorf("write configuration: %w", err)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load games: %w", err)
 	}
-	return nil
-}
-
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
+	if err := cfg.Validate(); err != nil {
+		warnings = append(warnings, fmt.Sprintf("saved configuration was invalid (%v); starting with play blocked and no games", err))
+		cfg = model.DefaultConfig()
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
+	s.cfg = cfg
+	for _, warning := range warnings {
+		s.loadNotice = appendNoticeText(s.loadNotice, warning)
 	}
 	return nil
 }
 
-func cloneConfig(c model.Config) model.Config {
-	out := c
-	out.Games = append([]model.Game(nil), c.Games...)
-	if out.Games == nil {
-		out.Games = []model.Game{}
-	}
-	return out
-}
-
-// AddEvent appends one audit event. When the current log reaches its size
-// limit, it retains the previous log as audit.1.jsonl and starts a new one.
+// AddEvent appends one audit event. The database retains a bounded number of
+// the newest events.
 func (s *Store) AddEvent(event model.AuditEvent) error {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 
+	if s.db == nil {
+		return errors.New("database is not open")
+	}
 	if event.Time.IsZero() {
 		event.Time = s.now().UTC()
 	} else {
@@ -287,44 +317,29 @@ func (s *Store) AddEvent(event model.AuditEvent) error {
 		event.Type = model.EventSystem
 	}
 
-	data, err := json.Marshal(event)
+	_, err := s.db.Exec(
+		`INSERT INTO audit_events (time, type, message, actor_ip, game_id, game_name, pid, result)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		formatTime(event.Time),
+		event.Type,
+		event.Message,
+		event.ActorIP,
+		event.GameID,
+		event.GameName,
+		int64(event.PID),
+		event.Result,
+	)
 	if err != nil {
-		return fmt.Errorf("encode audit event: %w", err)
+		return fmt.Errorf("append audit event: %w", err)
 	}
-	data = append(data, '\n')
-
-	current := filepath.Join(s.dir, auditFile)
-	if info, err := os.Stat(current); err == nil && info.Size()+int64(len(data)) > auditMaxBytes {
-		if err := rotateAudit(current, filepath.Join(s.dir, auditRotated)); err != nil {
-			return err
-		}
-	}
-
-	f, err := os.OpenFile(current, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) // #nosec G304 -- fixed audit log name under the protected data directory.
-	if err != nil {
-		return fmt.Errorf("open audit log: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("append audit log: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("sync audit log: %w", err)
-	}
-	return f.Close()
-}
-
-func rotateAudit(current, rotated string) error {
-	_ = os.Remove(rotated)
-	if err := os.Rename(current, rotated); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("rotate audit log: %w", err)
-	}
+	_, _ = s.db.Exec(
+		`DELETE FROM audit_events WHERE seq <= (SELECT MAX(seq) FROM audit_events) - ?`,
+		auditMaxRows,
+	)
 	return nil
 }
 
-// RecentEvents returns up to limit events in chronological order, reading the
-// rotated log if needed.
+// RecentEvents returns up to limit events in chronological order.
 func (s *Store) RecentEvents(limit int) ([]model.AuditEvent, error) {
 	if limit <= 0 {
 		limit = defaultRecent
@@ -332,48 +347,148 @@ func (s *Store) RecentEvents(limit int) ([]model.AuditEvent, error) {
 	if limit > 500 {
 		limit = 500
 	}
+	if s.db == nil {
+		return nil, errors.New("database is not open")
+	}
 
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 
-	var events []model.AuditEvent
-	for _, name := range []string{auditRotated, auditFile} {
-		batch, err := readEvents(filepath.Join(s.dir, name))
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, batch...)
+	rows, err := s.db.Query(
+		`SELECT time, type, message, actor_ip, game_id, game_name, pid, result
+		 FROM audit_events ORDER BY seq DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read audit events: %w", err)
 	}
-	if len(events) > limit {
-		events = events[len(events)-limit:]
+	defer rows.Close()
+
+	var reversed []model.AuditEvent
+	for rows.Next() {
+		var event model.AuditEvent
+		var when string
+		var pid int64
+		if err := rows.Scan(&when, &event.Type, &event.Message, &event.ActorIP, &event.GameID, &event.GameName, &pid, &event.Result); err != nil {
+			return nil, fmt.Errorf("read audit event: %w", err)
+		}
+		event.Time = parseTime(when)
+		if pid < 0 {
+			pid = 0
+		}
+		event.PID = uint32(pid)
+		reversed = append(reversed, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read audit events: %w", err)
+	}
+	events := make([]model.AuditEvent, len(reversed))
+	for i := range reversed {
+		events[len(reversed)-1-i] = reversed[i]
 	}
 	return events, nil
 }
 
-func readEvents(path string) ([]model.AuditEvent, error) {
-	f, err := os.Open(path) // #nosec G304 -- callers pass fixed audit file names under the protected data directory.
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+// LoadAuthRecord returns the persisted Argon2id record, if one exists.
+func (s *Store) LoadAuthRecord() (auth.Record, bool, error) {
+	if s.db == nil {
+		return auth.Record{}, false, errors.New("database is not open")
+	}
+	var record auth.Record
+	var updatedAt string
+	err := s.db.QueryRow(
+		`SELECT version, algorithm, salt, hash, time, memory_kib, threads, key_len, updated_at
+		 FROM auth_record WHERE id = 1`,
+	).Scan(
+		&record.Version,
+		&record.Algorithm,
+		&record.Salt,
+		&record.Hash,
+		&record.Time,
+		&record.MemoryKiB,
+		&record.Threads,
+		&record.KeyLen,
+		&updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return auth.Record{}, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open audit log: %w", err)
+		return auth.Record{}, false, fmt.Errorf("load authentication record: %w", err)
 	}
-	defer f.Close()
+	record.UpdatedAt = parseTime(updatedAt)
+	return record, true, nil
+}
 
-	var events []model.AuditEvent
-	scanner := bufio.NewScanner(io.LimitReader(f, auditMaxBytes+1))
-	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
-	for scanner.Scan() {
-		var event model.AuditEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		events = append(events, event)
+// SaveAuthRecord persists the authentication record.
+func (s *Store) SaveAuthRecord(record auth.Record) error {
+	if s.db == nil {
+		return errors.New("database is not open")
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read audit log: %w", err)
+	_, err := s.db.Exec(
+		`INSERT INTO auth_record
+		 (id, version, algorithm, salt, hash, time, memory_kib, threads, key_len, updated_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   version = excluded.version,
+		   algorithm = excluded.algorithm,
+		   salt = excluded.salt,
+		   hash = excluded.hash,
+		   time = excluded.time,
+		   memory_kib = excluded.memory_kib,
+		   threads = excluded.threads,
+		   key_len = excluded.key_len,
+		   updated_at = excluded.updated_at`,
+		record.Version,
+		record.Algorithm,
+		record.Salt,
+		record.Hash,
+		record.Time,
+		record.MemoryKiB,
+		record.Threads,
+		record.KeyLen,
+		formatTime(record.UpdatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save authentication record: %w", err)
 	}
-	return events, nil
+	s.refreshAuthBackup()
+	return nil
+}
+
+// ClearAuthRecord removes the administrator PIN record while preserving all
+// other state.
+func (s *Store) ClearAuthRecord() error {
+	if s.db == nil {
+		return errors.New("database is not open")
+	}
+	if _, err := s.db.Exec(`DELETE FROM auth_record WHERE id = 1`); err != nil {
+		return fmt.Errorf("clear authentication record: %w", err)
+	}
+	s.refreshAuthBackup()
+	return nil
+}
+
+// refreshAuthBackup refreshes the snapshot after an authentication change. If
+// the snapshot cannot be refreshed, the stale copy is removed so it cannot
+// later restore a previous PIN.
+func (s *Store) refreshAuthBackup() {
+	if err := s.refreshBackup(); err == nil {
+		return
+	} else if removeErr := removePath(s.backupPath); removeErr == nil {
+		s.appendNotice(fmt.Sprintf("could not refresh database backup after an authentication change (%v); the stale backup was removed", err))
+	} else {
+		s.appendNotice(fmt.Sprintf("could not refresh or remove database backup after an authentication change (%v); stale backup removal failed: %v", err, removeErr))
+	}
+}
+
+func cloneConfig(c model.Config) model.Config {
+	out := c
+	out.Games = append([]model.Game(nil), c.Games...)
+	if out.Games == nil {
+		out.Games = []model.Game{}
+	}
+	return out
 }
 
 func truncate(s string, max int) string {
@@ -382,4 +497,40 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+func appendNoticeText(existing, addition string) string {
+	addition = strings.TrimSpace(addition)
+	if addition == "" {
+		return existing
+	}
+	if existing == "" {
+		return addition
+	}
+	return existing + "; " + addition
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseTime(value string) time.Time {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
 }

@@ -206,22 +206,32 @@ func resetPINAndOpenSetup(resetAdmin bool) error {
 	if err := stopService(); err != nil {
 		return fmt.Errorf("stop service before reset: %w", err)
 	}
-	if err := os.Remove(authPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := ensurePrivateDataDir(); err != nil {
+		return fmt.Errorf("secure data directory before reset: %w", err)
+	}
+	st, err := store.Open(dataDir(), time.Now)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	if err := st.ClearAuthRecord(); err != nil {
+		_ = st.Close()
 		return fmt.Errorf("remove current PIN: %w", err)
 	}
 	if err := os.Remove(setupTokenPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = st.Close()
 		return fmt.Errorf("remove stale setup token: %w", err)
 	}
-	if st, err := store.Open(dataDir(), time.Now); err == nil {
-		message := "A fresh first-run setup link was requested locally."
-		if resetAdmin {
-			message = "Administrator PIN was reset by a local administrator."
-		}
-		_ = st.AddEvent(model.AuditEvent{
-			Type:    model.EventAuth,
-			Message: message,
-			Result:  "reset",
-		})
+	message := "A fresh first-run setup link was requested locally."
+	if resetAdmin {
+		message = "Administrator PIN was reset by a local administrator."
+	}
+	_ = st.AddEvent(model.AuditEvent{
+		Type:    model.EventAuth,
+		Message: message,
+		Result:  "reset",
+	})
+	if err := st.Close(); err != nil {
+		return fmt.Errorf("close database after reset: %w", err)
 	}
 	if err := startService(); err != nil {
 		return fmt.Errorf("start service after reset: %w", err)

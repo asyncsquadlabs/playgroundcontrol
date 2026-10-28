@@ -100,7 +100,8 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authManager, err := auth.Open(dir, time.Now)
+	t.Cleanup(func() { _ = st.Close() })
+	authManager, err := auth.Open(dir, st, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,5 +552,69 @@ func TestStaticDashboardIsServed(t *testing.T) {
 	result = app.request(t, http.MethodGet, "/assets/app.js", nil, "", "")
 	if result.status != http.StatusOK || len(result.body) == 0 {
 		t.Fatalf("app.js status=%d", result.status)
+	}
+}
+
+func TestPINPersistsAcrossApplicationRestart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAuth, err := auth.Open(dir, st, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstAuth.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	token, err := os.ReadFile(firstAuth.SetupTokenPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstAuth.Setup(strings.TrimSpace(string(token)), "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloadedStore, err := store.Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reloadedStore.Close() })
+	reloadedAuth, err := auth.Open(dir, reloadedStore, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloadedAuth.SetupRequired() {
+		t.Fatal("PIN did not survive application restart")
+	}
+	if _, err := reloadedAuth.Login("127.0.0.1", "123456"); err != nil {
+		t.Fatalf("login with persisted PIN: %v", err)
+	}
+
+	api := New(Options{
+		Address:     "127.0.0.1:8080",
+		Version:     "test-version",
+		LaunchGuard: &fakeLaunchGuard{blocked: true},
+	}, reloadedStore, reloadedAuth, &fakeEnforcer{status: enforce.Status{
+		RunningBlockedGames: []enforce.Match{},
+		PendingClosures:     []enforce.Pending{},
+	}})
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+	response, err := http.Get(ts.URL + "/api/v1/bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var bootstrap map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	if bootstrap["setupRequired"] != false {
+		t.Fatalf("bootstrap after restart = %+v", bootstrap)
 	}
 }

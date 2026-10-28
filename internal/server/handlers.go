@@ -198,9 +198,6 @@ func (s *Server) state(session auth.Session) stateResponse {
 	if notice := s.store.LoadNotice(); notice != "" {
 		warnings = append(warnings, notice)
 	}
-	if notice := s.auth.LoadNotice(); notice != "" {
-		warnings = append(warnings, notice)
-	}
 	guardActive := false
 	if s.launchGuard != nil {
 		var err error
