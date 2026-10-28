@@ -26,6 +26,10 @@ func TestSecurePrivateDirectory(t *testing.T) {
 	if err := securePrivateDirectory(dir); err != nil {
 		t.Fatalf("secure directory: %v", err)
 	}
+	// A second pass must recognize the exact DACL and skip the icacls work.
+	if err := securePrivateDirectory(dir); err != nil {
+		t.Fatalf("re-secure directory: %v", err)
+	}
 	sd, err := windows.GetNamedSecurityInfo(
 		dir,
 		windows.SE_FILE_OBJECT,

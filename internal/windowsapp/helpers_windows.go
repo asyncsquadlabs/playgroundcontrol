@@ -15,8 +15,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const (
@@ -284,8 +286,12 @@ func ensurePrivateDataDir() error {
 // securePrivateDirectory replaces the directory DACL with a protected DACL
 // owned by Administrators and accessible only to SYSTEM and Administrators.
 // Resetting first removes any explicit or inherited ACEs supplied by a
-// pre-existing user-created directory.
+// pre-existing user-created directory. If the directory already has the exact
+// expected owner/DACL, the comparatively expensive icacls passes are skipped.
 func securePrivateDirectory(dir string) error {
+	if privateDirectorySecure(dir) {
+		return nil
+	}
 	steps := [][]string{
 		{dir, "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"},
 		{dir, "/reset", "/T", "/C", "/Q"},
@@ -298,6 +304,80 @@ func securePrivateDirectory(dir string) error {
 		}
 	}
 	return nil
+}
+
+const fileAllAccess = 0x1F01FF
+
+func privateDirectorySecure(dir string) bool {
+	sd, err := windows.GetNamedSecurityInfo(
+		dir,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return false
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil {
+		return false
+	}
+	adminSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil || !owner.Equals(adminSID) {
+		return false
+	}
+	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return false
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		return false
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 2 {
+		return false
+	}
+	seenSystem := false
+	seenAdmin := false
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil || ace == nil {
+			return false
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || uint32(ace.Mask) != fileAllAccess {
+			return false
+		}
+		if ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE {
+			return false
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(systemSID):
+			seenSystem = true
+		case sid.Equals(adminSID):
+			seenAdmin = true
+		default:
+			return false
+		}
+	}
+	return seenSystem && seenAdmin
+}
+
+func installedVersion() string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	value, _, err := key.GetStringValue("DisplayVersion")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func serviceLogPath() string {
+	return filepath.Join(dataDir(), "service.log")
 }
 
 func rejectReparsePoints(root string) error {

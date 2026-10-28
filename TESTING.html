@@ -1245,7 +1245,7 @@
         </svg>
       </span>
       <p class="brand-name">Playground Control</p>
-      <span class="release-chip">v1.1.0</span>
+      <span class="release-chip">v1.2.0</span>
       <span class="release-chip">Windows 10/11 x64</span>
       <span class="mini-chip">Acceptance guide</span>
     </div>
@@ -1262,7 +1262,7 @@
           <a class="button ghost" href="dist/PlaygroundControl.exe" download>Get the EXE</a>
         </div>
         <div class="hero-meta">
-          <span>23 test items</span>
+          <span>24 test items</span>
           <span>About 50-65 minutes</span>
           <span>Destructive uninstall test at the end</span>
         </div>
@@ -1272,13 +1272,13 @@
         <p class="artifact-label">Release artifact</p>
         <p class="artifact-name">PlaygroundControl.exe</p>
         <dl class="artifact-meta">
-          <dt>Build</dt><dd>1.1.0, single self-installing EXE</dd>
+          <dt>Build</dt><dd>1.2.0, single self-installing EXE</dd>
           <dt>Target</dt><dd>Windows 10/11 x64, no runtime install</dd>
-          <dt>Size</dt><dd>About 7.2 MiB</dd>
+          <dt>Size</dt><dd>About 12 MiB</dd>
           <dt>Status</dt><dd>Unsigned test build</dd>
         </dl>
         <div class="hash-row">
-          <p class="hash" id="artifactHash">25d55e728f94cb221a40173c3af5bcde0516bc4e6dcdd51068eb6160d08d1ecb</p>
+          <p class="hash" id="artifactHash">1bbf11f776f9d9dd01b85c9b3dd6d9b590596792a7077a1bde8736f4c750843f</p>
           <button class="icon-button" type="button" data-copy-target="#artifactHash" aria-label="Copy SHA-256 hash" title="Copy SHA-256">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg>
           </button>
@@ -1469,10 +1469,10 @@ Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory</
       <div class="section-heading">
         <div>
           <p class="section-eyebrow">Phase 1</p>
-          <h2>Installation and service registration</h2>
-          <p>Observe the first-run experience and prove that Windows received the service, firewall rule, uninstall entry, and protected data directory.</p>
+          <h2>Installation, recovery, and service registration</h2>
+          <p>Observe the live setup transcript and prove that Windows received the service, firewall rule, uninstall entry, and protected data directory. Then exercise repair and full-reset recovery.</p>
         </div>
-        <span class="section-count">4 tests</span>
+        <span class="section-count">5 tests</span>
       </div>
 
       <div class="phase">
@@ -1491,7 +1491,7 @@ Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory</
               <div class="test-topline"><span class="test-id">I.1</span><span class="level essential">Essential</span><span class="time">3 min</span></div>
               <h3 class="test-title">Double-click the EXE and approve the UAC prompt</h3>
               <p class="test-body">SmartScreen may show <strong>Windows protected your PC</strong> because the test EXE is unsigned. If you verified the hash, choose <strong>More info</strong>, then <strong>Run anyway</strong>. Approve the administrator prompt. No separate installer framework or runtime is needed.</p>
-              <div class="expected"><strong>Expected</strong>The installer completes without a console window. It copies itself to <code>C:\Program Files\PlaygroundControl\PlaygroundControl.exe</code>, starts the service, and opens a local first-run setup page in your default browser. If the browser does not open, see Troubleshooting.</div>
+              <div class="expected"><strong>Expected</strong>A native <strong>Playground Control Setup</strong> window appears with a live step transcript, progress bar, current status, and Copy details button. It lists preflight, file copy, data-directory ACL, Event Log, service, firewall, uninstall entry, service-start phases, and the dashboard health check. It copies the EXE to <code>C:\Program Files\PlaygroundControl\PlaygroundControl.exe</code>, starts the service, and opens the local first-run setup page. If the service fails, the window shows the last startup phase, Windows exit code, service.log tail, and Event Log entries.</div>
             </div>
           </article>
 
@@ -1540,7 +1540,7 @@ Get-NetFirewallRule -DisplayName 'Playground Control' -ErrorAction SilentlyConti
 # Expected shape:
 # {
 #   "ok": true,
-#   "version": "1.1.0",
+#   "version": "1.2.0",
 #   "setup": true
 # }</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
@@ -1566,12 +1566,33 @@ Get-ChildItem 'C:\ProgramData\PlaygroundControl' -Force
 icacls 'C:\ProgramData\PlaygroundControl'
 
 # After setup, the following should exist:
-#   playground.db, playground.db.bak, service.log
+#   playground.db, playground.db.bak, service.log, install.log
 #   (playground.db-wal and playground.db-shm may appear while running)
 #   setup.token exists only until setup completes
 # The ACL should show SYSTEM and Administrators, not BUILTIN\Users.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
               <div class="expected"><strong>Expected</strong>Program Files contains the EXE. ProgramData is accessible to SYSTEM and Administrators only. Standard users must not be granted access.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="install-recovery" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="install-recovery">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark repair and full-reset recovery complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">I.5</span><span class="level advanced">Advanced</span><span class="time">8 min</span></div>
+              <h3 class="test-title">Exercise repair and full-reset recovery</h3>
+              <p class="test-body">On a disposable test PC, run the installed EXE with <code>--repair</code> and verify that the PIN, games, play state, and history are preserved. Then use <code>--reinstall</code>, review the destructive confirmation, and verify that ProgramData is removed and the first-run setup returns. Do not perform this test on a machine with data you need.</p>
+              <details class="command">
+                <summary>PowerShell: inspect installer logs and service state after each attempt</summary>
+                <div class="code-wrap"><pre><code>Get-Service PlaygroundControl | Format-List Name, Status, StartType
+Get-Content 'C:\ProgramData\PlaygroundControl\install.log' -Tail 40
+Get-Content 'C:\ProgramData\PlaygroundControl\service.log' -Tail 40
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/health</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+              </details>
+              <div class="expected"><strong>Expected</strong>Repair completes with the existing PIN and data intact. Full reset asks for a second explicit confirmation, removes the service and ProgramData, and returns to first-run setup. Failures show the actual Windows service error and preserve install.log/service.log for diagnosis.</div>
             </div>
           </article>
         </div>
@@ -2042,8 +2063,8 @@ Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
             </tr>
             <tr>
               <td>Service will not start</td>
-              <td>Check service status, Event Viewer, service.log, and the ProgramData ACL.</td>
-              <td>Use <code>Get-WinEvent -ProviderName PlaygroundControl</code>. Reinstall if the service registration is missing or corrupt; uninstall first.</td>
+              <td>The setup window now shows the last startup phase, Windows exit code, service.log tail, and recent Event Log entries instead of a generic 30-second timeout.</td>
+              <td>Choose <strong>Repair / keep data</strong> first. If repair fails, review install.log and service.log, then choose <strong>Full reset</strong> only after confirming that deleting the PIN, games, and history is acceptable. Scripted recovery: <code>PlaygroundControl.exe --repair</code> or <code>PlaygroundControl.exe --reinstall</code>.</td>
             </tr>
             <tr>
               <td>Uninstall is incomplete</td>
@@ -2166,7 +2187,7 @@ make sign SIGN_CMD='signtool sign /fd SHA256 /tr http://timestamp.digicert.com /
     </section>
 
     <footer>
-      <p>Playground Control v1.1.0 acceptance guide. Generated for the current release artifact.</p>
+      <p>Playground Control v1.2.0 acceptance guide. Generated for the current release artifact.</p>
       <p>This page is self-contained and does not load remote fonts, scripts, images, or analytics. Use Print / save PDF for an offline copy.</p>
     </footer>
   </main>

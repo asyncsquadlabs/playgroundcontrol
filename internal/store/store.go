@@ -71,10 +71,17 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 		s.db = nil
 		return nil, err
 	}
-	if err := s.refreshBackup(); err != nil {
-		s.appendNotice(fmt.Sprintf("could not refresh database backup: %v", err))
-	}
 	return s, nil
+}
+
+// EnsureBackup creates the last-known-good snapshot when it is missing. Normal
+// mutations and clean shutdown refresh it; the service calls this in the
+// background after it is running so startup does not wait on VACUUM.
+func (s *Store) EnsureBackup() error {
+	if regularFileExists(s.backupPath) {
+		return nil
+	}
+	return s.refreshBackup()
 }
 
 // DataDir returns the directory backing this store.

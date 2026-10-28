@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"strings"
@@ -89,7 +90,15 @@ func TestPINFormatAndHashing(t *testing.T) {
 		t.Fatal("incorrect PIN verified")
 	}
 	tampered := record
-	tampered.Hash = record.Hash[:len(record.Hash)-2] + "AA"
+	rawHash, err := base64.RawStdEncoding.DecodeString(record.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawHash[0] ^= 0x01
+	tampered.Hash = base64.RawStdEncoding.EncodeToString(rawHash)
+	if tampered.Hash == record.Hash {
+		t.Fatal("tamper mutation did not change the encoded hash")
+	}
 	if verifyPIN(tampered, "654321") {
 		t.Fatal("tampered hash verified")
 	}

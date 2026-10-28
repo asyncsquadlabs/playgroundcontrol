@@ -31,11 +31,24 @@ type runtimeApp struct {
 	enforcerDone chan struct{}
 }
 
-func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
+func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, error) {
+	reportPhase := func(checkpoint uint32) {
+		label := startupPhaseLabel(checkpoint)
+		if label == "" {
+			label = "unknown"
+		}
+		logger.Infof("startup phase %d: %s", checkpoint, label)
+		if report != nil {
+			report(checkpoint)
+		}
+	}
+
+	reportPhase(startupPhaseDataDir)
 	if err := ensurePrivateDataDir(); err != nil {
 		logger.Errorf("failed to secure application data directory: %v", err)
 		return nil, fmt.Errorf("secure application data: %w", err)
 	}
+	reportPhase(startupPhaseDatabase)
 	st, err := store.Open(dataDir(), time.Now)
 	if err != nil {
 		return nil, fmt.Errorf("open configuration: %w", err)
@@ -46,6 +59,7 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 			_ = st.Close()
 		}
 	}()
+	reportPhase(startupPhaseAuth)
 	authManager, err := auth.Open(dataDir(), st, time.Now)
 	if err != nil {
 		return nil, fmt.Errorf("open authentication: %w", err)
@@ -62,6 +76,7 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 			Result:  "warning",
 		})
 	}
+	reportPhase(startupPhaseGuard)
 	launchGuard, err := platform.NewRobloxGuard()
 	if err != nil {
 		return nil, fmt.Errorf("initialize Roblox launch guard: %w", err)
@@ -93,6 +108,7 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 		engine.Run(ctx)
 	}()
 
+	reportPhase(startupPhaseListener)
 	httpAPI := server.New(server.Options{
 		Address:     fmt.Sprintf("0.0.0.0:%d", server.Port),
 		Version:     buildinfo.Version,
@@ -133,6 +149,10 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 		}
 	}()
 
+	reportPhase(startupPhaseReady)
+	if err := st.EnsureBackup(); err != nil {
+		logger.Warningf("could not refresh database backup: %v", err)
+	}
 	logger.Infof("service started; version=%s; port=%d; setupRequired=%t; database=%s", buildinfo.Version, server.Port, authManager.SetupRequired(), st.DatabasePath())
 	_ = st.AddEvent(model.AuditEvent{
 		Type:    model.EventSystem,
@@ -177,17 +197,22 @@ type serviceHandler struct {
 }
 
 func (h *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+	// Report StartPending before any filesystem, registry, or logger work so a
+	// slow ProgramData or antivirus scan cannot consume the SCM startup window.
+	changes <- svc.Status{State: svc.StartPending, CheckPoint: startupPhaseDataDir, WaitHint: serviceWaitHintMS}
 	if h.logger == nil {
 		h.logger = newServiceLogger()
 	}
-	changes <- svc.Status{State: svc.StartPending}
 
-	app, err := startRuntime(h.logger)
+	report := func(checkpoint uint32) {
+		changes <- svc.Status{State: svc.StartPending, CheckPoint: checkpoint, WaitHint: serviceWaitHintMS}
+	}
+	app, err := startRuntime(h.logger, report)
 	if err != nil {
 		h.logger.Errorf("service failed to start: %v", err)
 		changes <- svc.Status{State: svc.Stopped}
 		h.logger.Close()
-		return false, 1
+		return true, 1
 	}
 
 	running := svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
