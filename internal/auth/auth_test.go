@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,9 +16,40 @@ type fakeClock struct {
 func (c *fakeClock) Now() time.Time      { return c.current }
 func (c *fakeClock) Add(d time.Duration) { c.current = c.current.Add(d) }
 
+type memoryRecordStore struct {
+	mu      sync.Mutex
+	record  *Record
+	loadErr error
+	saveErr error
+}
+
+func (m *memoryRecordStore) LoadAuthRecord() (Record, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.loadErr != nil {
+		return Record{}, false, m.loadErr
+	}
+	if m.record == nil {
+		return Record{}, false, nil
+	}
+	return *m.record, true, nil
+}
+
+func (m *memoryRecordStore) SaveAuthRecord(record Record) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	copied := record
+	m.record = &copied
+	return nil
+}
+
 func configuredManager(t *testing.T, clock *fakeClock, pin string) *Manager {
 	t.Helper()
-	m, err := Open(t.TempDir(), clock.Now)
+	records := &memoryRecordStore{}
+	m, err := Open(t.TempDir(), records, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +98,8 @@ func TestPINFormatAndHashing(t *testing.T) {
 func TestSetupConsumesTokenAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{current: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
-	m, err := Open(dir, clock.Now)
+	records := &memoryRecordStore{}
+	m, err := Open(dir, records, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +136,7 @@ func TestSetupConsumesTokenAndPersists(t *testing.T) {
 		t.Fatalf("login after setup: %v", err)
 	}
 
-	reloaded, err := Open(dir, clock.Now)
+	reloaded, err := Open(dir, records, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,9 +148,50 @@ func TestSetupConsumesTokenAndPersists(t *testing.T) {
 	}
 }
 
+func TestSetupSaveFailureDoesNotMarkConfigured(t *testing.T) {
+	dir := t.TempDir()
+	records := &memoryRecordStore{}
+	m, err := Open(dir, records, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(m.SetupTokenPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimSpace(string(raw))
+	records.saveErr = errors.New("disk unavailable")
+	if err := m.Setup(token, "123456"); err == nil {
+		t.Fatal("setup unexpectedly succeeded")
+	}
+	if !m.SetupRequired() {
+		t.Fatal("failed save must leave setup required")
+	}
+	if !m.SetupTokenValid(token) {
+		t.Fatal("failed save must leave the setup token usable")
+	}
+}
+
+func TestOpenRejectsInvalidRecord(t *testing.T) {
+	records := &memoryRecordStore{record: &Record{Version: 99}}
+	if _, err := Open(t.TempDir(), records, time.Now); !errors.Is(err, ErrBadAuth) {
+		t.Fatalf("invalid record error = %v, want ErrBadAuth", err)
+	}
+}
+
+func TestOpenPropagatesRecordStoreFailure(t *testing.T) {
+	records := &memoryRecordStore{loadErr: errors.New("storage unavailable")}
+	if _, err := Open(t.TempDir(), records, time.Now); err == nil {
+		t.Fatal("record store failure was ignored")
+	}
+}
+
 func TestSetupTokenExpires(t *testing.T) {
 	clock := &fakeClock{current: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
-	m, err := Open(t.TempDir(), clock.Now)
+	m, err := Open(t.TempDir(), &memoryRecordStore{}, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}

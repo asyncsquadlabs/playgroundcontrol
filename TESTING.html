@@ -1245,7 +1245,7 @@
         </svg>
       </span>
       <p class="brand-name">Playground Control</p>
-      <span class="release-chip">v1.0.0</span>
+      <span class="release-chip">v1.1.0</span>
       <span class="release-chip">Windows 10/11 x64</span>
       <span class="mini-chip">Acceptance guide</span>
     </div>
@@ -1272,7 +1272,7 @@
         <p class="artifact-label">Release artifact</p>
         <p class="artifact-name">PlaygroundControl.exe</p>
         <dl class="artifact-meta">
-          <dt>Build</dt><dd>1.0.0, single self-installing EXE</dd>
+          <dt>Build</dt><dd>1.1.0, single self-installing EXE</dd>
           <dt>Target</dt><dd>Windows 10/11 x64, no runtime install</dd>
           <dt>Size</dt><dd>About 7.2 MiB</dd>
           <dt>Status</dt><dd>Unsigned test build</dd>
@@ -1540,7 +1540,7 @@ Get-NetFirewallRule -DisplayName 'Playground Control' -ErrorAction SilentlyConti
 # Expected shape:
 # {
 #   "ok": true,
-#   "version": "1.0.0",
+#   "version": "1.1.0",
 #   "setup": true
 # }</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
@@ -1566,7 +1566,9 @@ Get-ChildItem 'C:\ProgramData\PlaygroundControl' -Force
 icacls 'C:\ProgramData\PlaygroundControl'
 
 # After setup, the following should exist:
-#   auth.json, setup.token (until setup completes), service.log
+#   playground.db, playground.db.bak, service.log
+#   (playground.db-wal and playground.db-shm may appear while running)
+#   setup.token exists only until setup completes
 # The ACL should show SYSTEM and Administrators, not BUILTIN\Users.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
               <div class="expected"><strong>Expected</strong>Program Files contains the EXE. ProgramData is accessible to SYSTEM and Administrators only. Standard users must not be granted access.</div>
@@ -1781,10 +1783,11 @@ reg.exe query "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Ima
 Start-Sleep -Seconds 2
 (Get-Service PlaygroundControl).Status
 
-# After reboot, open the dashboard again and sign in.
-# Expected: Play is allowed and the game list are unchanged.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+# After reboot, open the dashboard again.
+# Expected: the login screen asks for the EXISTING PIN, not a new PIN.
+# Sign in with the original PIN. Play is allowed and the game list is unchanged.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
-              <div class="expected"><strong>Expected</strong>The service returns after reboot and the saved permission/game list are intact. Sessions do not survive service restart; sign in again. Play state is persistent by design and does not auto-expire.</div>
+              <div class="expected"><strong>Expected</strong>The service returns after reboot and the saved permission/game list are intact. The dashboard never presents first-run setup again on a healthy database. Sessions do not survive service restart, so sign in with the existing PIN again. Play state is persistent by design and does not auto-expire.</div>
             </div>
           </article>
         </div>
@@ -1847,7 +1850,7 @@ curl.exe -s -o NUL -w "%{http_code}`n" -H "Host: evil.example" http://127.0.0.1:
               <p class="test-body">Complete at least one permission toggle and one enforcement event first. Use an elevated PowerShell prompt because ProgramData is ACL-restricted.</p>
               <details class="command">
                 <summary>PowerShell: inspect audit and service evidence</summary>
-                <div class="code-wrap"><pre><code>Get-Content 'C:\ProgramData\PlaygroundControl\audit.jsonl' -Tail 15
+                <div class="code-wrap"><pre><code># Open the signed-in dashboard's Activity section and confirm recent entries.
 
 Get-WinEvent -ProviderName PlaygroundControl -MaxEvents 15 |
   Select-Object TimeCreated, Id, LevelDisplayName, Message |
@@ -1855,7 +1858,7 @@ Get-WinEvent -ProviderName PlaygroundControl -MaxEvents 15 |
 
 Get-Content 'C:\ProgramData\PlaygroundControl\service.log' -Tail 15</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
-              <div class="expected"><strong>Expected</strong>Audit JSON lines show permission changes, game changes, login failures, and closure events with timestamps and source IPs. Event Viewer shows service start/stop and errors. No PIN, setup token, or session token appears in any log.</div>
+              <div class="expected"><strong>Expected</strong>Dashboard activity entries show permission changes, game changes, login failures, and closure events with timestamps and source IPs. Event Viewer shows service start/stop, database recovery warnings, and errors. No PIN, setup token, or session token appears in any log.</div>
             </div>
           </article>
 
@@ -1874,7 +1877,7 @@ Get-Content 'C:\ProgramData\PlaygroundControl\service.log' -Tail 15</code></pre>
                 <div class="code-wrap"><pre><code>Stop-Service PlaygroundControl
 # Expected: Access is denied / Administrator permission required
 
-Get-Content 'C:\ProgramData\PlaygroundControl\auth.json'
+Get-Content 'C:\ProgramData\PlaygroundControl\playground.db'
 # Expected: Access is denied
 
 Get-ChildItem 'C:\ProgramData\PlaygroundControl'
@@ -2095,7 +2098,7 @@ done</code></pre><button class="copy-code" type="button" aria-label="Copy comman
           <h3>Automated coverage</h3>
           <ul class="coverage-list">
             <li>Game validation, path matching, and critical-process rejection</li>
-            <li>Config persistence, backup recovery, fail-closed defaults, and audit rotation</li>
+            <li>SQLite persistence, backup restore, corrupt-database recovery, legacy migration, and bounded audit retention</li>
             <li>PIN hashing, setup token consumption/expiry, lockout, sessions, and PIN changes</li>
             <li>Close-request / 10-second force-close state machine and cancellation rules</li>
             <li>API authorization, CSRF, origin/Host checks, setup-only-loopback, and cookies</li>
@@ -2163,7 +2166,7 @@ make sign SIGN_CMD='signtool sign /fd SHA256 /tr http://timestamp.digicert.com /
     </section>
 
     <footer>
-      <p>Playground Control v1.0.0 acceptance guide. Generated for the current release artifact.</p>
+      <p>Playground Control v1.1.0 acceptance guide. Generated for the current release artifact.</p>
       <p>This page is self-contained and does not load remote fonts, scripts, images, or analytics. Use Print / save PDF for an offline copy.</p>
     </footer>
   </main>

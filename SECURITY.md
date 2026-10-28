@@ -58,7 +58,13 @@ administrator access is outside the protection boundary.
   reconfigure it through the Service Control Manager.
 - ProgramData is owned by Administrators and protected by an explicit DACL
   granting access only to SYSTEM and Administrators. Reparse points are
-  rejected. User-owned pre-existing directories are reset before use.
+  rejected. User-owned pre-existing directories are reset before use. The
+  SQLite database, WAL/SHM files, and last-known-good backup inherit that DACL.
+- State changes are committed in SQLite transactions with WAL and full
+  synchronous durability. A last-known-good snapshot is kept for recovery, and
+  unusable databases are archived rather than overwritten. Initial setup is
+  offered only when a healthy database has no administrator PIN row, unless no
+  backup can be restored.
 - The Windows firewall rule is inbound-only, TCP 8080, private profile, local
   subnet only.
 
@@ -104,9 +110,11 @@ and sign binaries for production deployment.
 
 ### No hardware-backed secrets
 
-The PIN hash and configuration are protected by Windows file ACLs, not a TPM or
-hardware security module. A local administrator or offline attacker with disk
-access can replace or delete the data directory.
+The SQLite database, PIN hash, configuration, audit history, and backup are
+protected by Windows file ACLs, not a TPM or hardware security module. A local
+administrator or offline attacker with disk access can replace or delete the
+data directory. Sessions are intentionally memory-only and are not stored in
+the database.
 
 ## Hardening recommendations
 

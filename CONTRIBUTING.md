@@ -38,7 +38,7 @@ make build
 
 ## Windows integration changes
 
-Installer, service-manager, firewall, ACL, IFEO, and close-helper changes need particular care. Include:
+Installer, service-manager, firewall, ACL, SQLite schema/migration/recovery, IFEO, and close-helper changes need particular care. Include:
 
 - The expected Windows version and edition.
 - Exact administrator/standard-user context.

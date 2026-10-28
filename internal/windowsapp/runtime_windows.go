@@ -40,7 +40,13 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open configuration: %w", err)
 	}
-	authManager, err := auth.Open(dataDir(), time.Now)
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = st.Close()
+		}
+	}()
+	authManager, err := auth.Open(dataDir(), st, time.Now)
 	if err != nil {
 		return nil, fmt.Errorf("open authentication: %w", err)
 	}
@@ -56,15 +62,6 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 			Result:  "warning",
 		})
 	}
-	if notice := authManager.LoadNotice(); notice != "" {
-		logger.Warningf("%s", notice)
-		_ = st.AddEvent(model.AuditEvent{
-			Type:    model.EventSystem,
-			Message: "Authentication warning: " + notice,
-			Result:  "warning",
-		})
-	}
-
 	launchGuard, err := platform.NewRobloxGuard()
 	if err != nil {
 		return nil, fmt.Errorf("initialize Roblox launch guard: %w", err)
@@ -136,12 +133,13 @@ func startRuntime(logger *serviceLogger) (*runtimeApp, error) {
 		}
 	}()
 
-	logger.Infof("service started; version=%s; port=%d; setupRequired=%t", buildinfo.Version, server.Port, authManager.SetupRequired())
+	logger.Infof("service started; version=%s; port=%d; setupRequired=%t; database=%s", buildinfo.Version, server.Port, authManager.SetupRequired(), st.DatabasePath())
 	_ = st.AddEvent(model.AuditEvent{
 		Type:    model.EventSystem,
 		Message: "Playground Control service started.",
 		Result:  "started",
 	})
+	succeeded = true
 	return app, nil
 }
 
@@ -168,6 +166,7 @@ func (a *runtimeApp) Shutdown() {
 			Message: "Playground Control service stopped.",
 			Result:  "stopped",
 		})
+		_ = a.store.Close()
 	}
 	a.logger.Infof("service stopped")
 	a.logger.Close()

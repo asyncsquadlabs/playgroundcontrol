@@ -21,8 +21,8 @@ const (
 	EventSystem      = "system"
 )
 
-// Config is the persisted state in config.json. The zero value is intentionally
-// safe: play is not allowed.
+// Config is the validated play state shared by persistence, the enforcer, and
+// the HTTP API. The zero value is intentionally safe: play is not allowed.
 type Config struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	PlayAllowed   bool      `json:"playAllowed"`

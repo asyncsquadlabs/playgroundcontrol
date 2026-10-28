@@ -64,10 +64,6 @@ func setupTokenPath() string {
 	return filepath.Join(dataDir(), "setup.token")
 }
 
-func authPath() string {
-	return filepath.Join(dataDir(), "auth.json")
-}
-
 func selfExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
