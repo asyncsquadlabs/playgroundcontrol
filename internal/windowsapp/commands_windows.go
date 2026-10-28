@@ -21,13 +21,12 @@ import (
 
 // commandDenyLaunch is invoked by Windows through the IFEO Debugger entry. It
 // does not start the original image, which is exactly what makes the block
-// happen before Roblox reaches process creation.
+// happen before Roblox reaches process creation. While play is blocked, the
+// launch is redirected to a fixed study-guide search instead of a warning.
 func commandDenyLaunch() {
-	showMessage(
-		"Playground Control",
-		"Roblox is blocked while parent-controlled play is turned off.\n\nAsk the administrator to enable play in the Playground Control dashboard.",
-		windows.MB_OK|windows.MB_ICONWARNING|windows.MB_SETFOREGROUND,
-	)
+	if err := openStudySearch(); err != nil {
+		showStudySearchFailure()
+	}
 }
 
 func commandInteractive() {
