@@ -213,16 +213,16 @@ func newSetupWindow() (*setupWindow, error) {
 
 func (w *setupWindow) createControls() {
 	font, _, _ := procGetStockObject.Call(defaultGUIFont)
-	header := w.createControl("STATIC", "Playground Control Setup", 18, 14, 650, 26, 0, 0)
-	w.createControl("STATIC", "Version "+setupVersion()+"  |  The setup window shows each installation step.", 18, 40, 650, 20, 0, 0)
-	w.details = w.createControl("EDIT", "", 18, 68, 650, 310, wsVScroll|esMultiline|esAutoVScroll|esReadOnly, wsExClientEdge)
-	w.status = w.createControl("STATIC", "Preparing setup...", 18, 386, 650, 22, 0, 0)
-	w.bar = w.createControl("msctls_progress32", "", 18, 412, 650, 18, 0, 0)
-	w.copy = w.createControl("BUTTON", "Copy details", 526, 442, 140, 30, 0, 0)
-	w.repair = w.createControl("BUTTON", "Repair / keep data", 18, 442, 160, 30, 0, 0)
-	w.reset = w.createControl("BUTTON", "Full reset", 186, 442, 120, 30, 0, 0)
-	w.exit = w.createControl("BUTTON", "Exit", 314, 442, 90, 30, 0, 0)
-	w.finish = w.createControl("BUTTON", "Finish", 314, 442, 90, 30, 0, 0)
+	header := w.createControl("STATIC", "Playground Control Setup", 0, 18, 14, 650, 26, 0, 0)
+	w.createControl("STATIC", "Version "+setupVersion()+"  |  The setup window shows each installation step.", 0, 18, 40, 650, 20, 0, 0)
+	w.details = w.createControl("EDIT", "", 0, 18, 68, 650, 310, wsVScroll|esMultiline|esAutoVScroll|esReadOnly, wsExClientEdge)
+	w.status = w.createControl("STATIC", "Preparing setup...", 0, 18, 386, 650, 22, 0, 0)
+	w.bar = w.createControl("msctls_progress32", "", 0, 18, 412, 650, 18, 0, 0)
+	w.copy = w.createControl("BUTTON", "Copy details", idCopyDetails, 526, 442, 140, 30, 0, 0)
+	w.repair = w.createControl("BUTTON", "Repair / keep data", idRepair, 18, 442, 160, 30, 0, 0)
+	w.reset = w.createControl("BUTTON", "Full reset", idFullReset, 186, 442, 120, 30, 0, 0)
+	w.exit = w.createControl("BUTTON", "Exit", idExit, 314, 442, 90, 30, 0, 0)
+	w.finish = w.createControl("BUTTON", "Finish", idFinish, 314, 442, 90, 30, 0, 0)
 	for _, control := range []windows.HWND{header, w.details, w.status, w.bar, w.copy, w.repair, w.reset, w.exit, w.finish} {
 		procSendMessageW.Call(uintptr(control), wmSetFont, font, 1)
 	}
@@ -239,7 +239,7 @@ func moduleHandle() (windows.Handle, error) {
 	return instance, err
 }
 
-func (w *setupWindow) createControl(class, text string, x, y, width, height int, style, exStyle uintptr) windows.HWND {
+func (w *setupWindow) createControl(class, text string, id uintptr, x, y, width, height int, style, exStyle uintptr) windows.HWND {
 	classPtr, _ := windows.UTF16PtrFromString(class)
 	textPtr, _ := windows.UTF16PtrFromString(text)
 	instance, _ := moduleHandle()
@@ -253,7 +253,7 @@ func (w *setupWindow) createControl(class, text string, x, y, width, height int,
 		uintptr(width),
 		uintptr(height),
 		uintptr(w.hwnd),
-		0,
+		id,
 		uintptr(instance),
 		0,
 	)
@@ -330,8 +330,9 @@ func (w *setupWindow) canClose() bool {
 }
 
 func (w *setupWindow) Run(work func()) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The caller must create the window and enter this message loop on the same
+	// OS thread. runSetupUI locks the thread before newSetupWindow for that
+	// reason; moving the lock here would be too late if the goroutine migrated.
 	go func() {
 		defer close(w.workDone)
 		defer func() {
@@ -560,6 +561,8 @@ func (m *messageBoxUI) WaitForFinish() {
 }
 
 func runSetupUI(work func(setupUI)) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	window, err := newSetupWindow()
 	if err != nil {
 		fallback := newMessageBoxUI()
