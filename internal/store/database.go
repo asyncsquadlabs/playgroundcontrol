@@ -258,16 +258,16 @@ func (s *Store) openPath(path string) (*sql.DB, error) {
 		return closeWith(fmt.Errorf("SQLite refused WAL mode (got %q)", journalMode))
 	}
 
-	rows, err := db.Query(`PRAGMA integrity_check`)
+	rows, err := db.Query(`PRAGMA quick_check`)
 	if err != nil {
-		return closeWith(fmt.Errorf("run integrity check: %w", err))
+		return closeWith(fmt.Errorf("run database quick check: %w", err))
 	}
 	var problems []string
 	for rows.Next() {
 		var result string
 		if err := rows.Scan(&result); err != nil {
 			_ = rows.Close()
-			return closeWith(fmt.Errorf("read integrity check: %w", err))
+			return closeWith(fmt.Errorf("read database quick check: %w", err))
 		}
 		if !strings.EqualFold(result, "ok") {
 			problems = append(problems, result)
@@ -275,11 +275,11 @@ func (s *Store) openPath(path string) (*sql.DB, error) {
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return closeWith(fmt.Errorf("read integrity check: %w", err))
+		return closeWith(fmt.Errorf("read database quick check: %w", err))
 	}
 	_ = rows.Close()
 	if len(problems) > 0 {
-		return closeWith(fmt.Errorf("database integrity check failed: %s", strings.Join(problems, "; ")))
+		return closeWith(fmt.Errorf("database quick check failed: %s", strings.Join(problems, "; ")))
 	}
 
 	// BEGIN IMMEDIATE verifies that the service can write, not merely read.

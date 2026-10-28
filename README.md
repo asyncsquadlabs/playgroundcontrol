@@ -10,7 +10,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 
 ## Status
 
-- **Version:** 1.1.0
+- **Version:** 1.2.0
 - **Target:** Windows 10/11 x64
 - **Distribution:** single self-installing EXE
 - **Runtime:** Go 1.26.10 or later required for source builds
@@ -36,20 +36,22 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 - PID plus process-creation-time identity checks to avoid terminating reused PIDs.
 - Windows Firewall rule limited to inbound TCP 8080 on the private profile and local subnet.
 - Protected SQLite ProgramData storage, last-known-good database backup, login throttling, CSRF protection, security headers, and fail-closed configuration handling.
-- Recovery commands for setup, PIN reset, and uninstall.
-- One-command test, build, resource, signing, and static-analysis workflows.
+- Live native setup window with a step-by-step transcript, service-start checkpoints, and copyable diagnostics.
+- In-place upgrade/repair that preserves the PIN, games, play state, and history, plus an explicitly confirmed full reset.
+- Recovery commands for setup, PIN reset, repair, reinstall, and uninstall.
+- One-command test, build, package, signing, and static-analysis workflows.
 
 ## Quick start (Windows)
 
-1. Download `PlaygroundControl-1.1.0-win-x64.zip` from the repository's Releases page.
+1. Download `PlaygroundControl-1.2.0-win-x64.zip` from the repository's Releases page.
 2. Verify the SHA-256 shown in the release notes.
 3. Extract the ZIP to a local folder.
-4. Run `PlaygroundControl.exe` and approve the UAC prompt. If Windows SmartScreen appears, verify the hash before choosing **More info → Run anyway**.
+4. Run `PlaygroundControl.exe` and approve the UAC prompt. If Windows SmartScreen appears, verify the hash before choosing **More info → Run anyway**. The setup window shows each installation step; when an older version is detected, choose **Repair / keep data** to upgrade in place.
 5. Complete the first-run setup on the gaming PC and choose an 8 to 12 digit PIN.
 6. Open the dashboard from a phone on the same private LAN using the URL shown by setup.
-7. Read [TESTING.html](TESTING.html) for the 23-item acceptance test.
+7. Read [TESTING.html](TESTING.html) for the 24-item acceptance test.
 
-If an earlier build is already installed, uninstall it before running this build. The current installer does not perform in-place upgrades. If you preserve `C:\ProgramData\PlaygroundControl` from a 1.0.x install, the first start imports its JSON/JSONL state into SQLite once and archives the old files as `*.migrated`; a normal uninstall deletes that directory.
+If an earlier build is already installed, run the 1.2.0 installer and choose **Repair / keep data** to upgrade in place. The installer uses a live setup window, preserves `C:\ProgramData\PlaygroundControl`, and reports the exact Windows service error if startup fails. Choose **Full reset** only when you intentionally want to delete the PIN, games, play state, and history. A preserved 1.0.x ProgramData directory is still imported into SQLite once and the old files are archived as `*.migrated`.
 
 ## How it works
 
@@ -109,6 +111,12 @@ make security
 # Build dist/PlaygroundControl.exe and its SHA-256
 make build
 
+# Build the versioned Windows ZIP and both checksum files
+make package
+
+# Run checks, build, and package
+make release
+
 # Regenerate the embedded Windows resource object after changing icon/version data
 make resources
 
@@ -144,18 +152,23 @@ The service owns these files under `C:\ProgramData\PlaygroundControl`:
 - `playground.db.bak` — last-known-good SQLite snapshot, refreshed after PIN/config/game changes and on clean shutdown
 - `playground.db-wal` / `playground.db-shm` — SQLite write-ahead log and shared-memory files while the service runs
 - `setup.token` — short-lived one-time setup token when unclaimed
-- `service.log` — service diagnostic log
+- `service.log` — service diagnostic log, including startup checkpoints
+- `install.log` — installer transcript (rotated at 2 MiB)
 - `*.migrated` — archived JSON/JSONL files after the one-time upgrade import
 
 The database uses WAL mode and full synchronous commits. A corrupt or unreadable primary database is archived with a timestamp suffix, the last-known-good backup is restored when valid, and a fresh setup is offered only when no usable backup exists. The latest three corrupt archives are retained. The directory is ACL-restricted to SYSTEM and Administrators. It is deleted on uninstall after confirmation, along with the service, firewall rule, PIN, game list, and audit history.
 
 Browser sessions remain in memory and do not survive a service or Windows restart. After a reboot, open the dashboard and sign in with the existing PIN; do not create a new one. An unreadable authentication record is a startup error rather than an automatic reset, so `--reset-admin` remains the explicit recovery path.
 
+If setup reports that the service did not start, the progress window shows the last startup phase, the Windows service exit code, the tail of `service.log`, and recent Event Log entries. Choose **Repair / keep data** first; if the database or ACL state is irrecoverable, choose **Full reset** after reviewing the destructive confirmation. The installer preserves `install.log` and copies it to `%TEMP%` before a full reset deletes ProgramData.
+
 Local administrator recovery commands:
 
 ```text
 PlaygroundControl.exe --setup         recreate the local setup link
 PlaygroundControl.exe --reset-admin   reset the administrator PIN (keeps play state, games, and audit history)
+PlaygroundControl.exe --repair        rebuild the service and application files, preserving all data
+PlaygroundControl.exe --reinstall     full reset, then a fresh installation (asks for confirmation)
 PlaygroundControl.exe --uninstall     remove the application and its data
 PlaygroundControl.exe --version
 ```
@@ -184,7 +197,7 @@ Security design, accepted risks, and the reporting process are documented in [SE
 
 ## Testing on Windows
 
-The 23-item runbook in [TESTING.html](TESTING.html) covers installation, UAC, SCM registration, ACLs, first-run PIN setup, LAN access, the Roblox pre-launch guard, game closure, persistence, security boundaries, and uninstall.
+The 24-item runbook in [TESTING.html](TESTING.html) covers installation, UAC, SCM registration, ACLs, repair/full reset recovery, first-run PIN setup, LAN access, the Roblox pre-launch guard, game closure, persistence, security boundaries, and uninstall.
 
 Automated tests also run under Wine in development for:
 
@@ -194,7 +207,7 @@ Automated tests also run under Wine in development for:
 - SQLite persistence, backup recovery, and one-time JSON migration
 - HTTP API, authentication, CSRF, origin, Host, and security-header checks
 
-A real Windows 10/11 x64 acceptance run is still required before production deployment, particularly for UAC, SCM, firewall, ACL propagation, IFEO launch interception, and reboot recovery.
+GitHub Actions also runs a Windows service-startup smoke test that creates the service, waits for `/api/v1/health`, captures diagnostics on failure, and removes the service. A real Windows 10/11 x64 acceptance run is still required before production deployment, particularly for UAC, the setup window, SCM, firewall, ACL propagation, IFEO launch interception, and reboot recovery.
 
 ## Contributing
 

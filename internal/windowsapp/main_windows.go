@@ -42,10 +42,14 @@ func Main() {
 		commandStart()
 	case hasArg(args, "--install"):
 		commandInstall()
+	case hasArg(args, "--repair"):
+		commandRepair()
+	case hasArg(args, "--reinstall"):
+		commandReinstall()
 	case hasArg(args, "--version"):
 		showInfo("Playground Control " + buildinfo.Version)
 	case hasArg(args, "--help"):
-		showInfo("Playground Control " + buildinfo.Version + "\n\nDouble-click to install or open the dashboard.\n\nLocal administrator recovery:\n  --setup         recreate the first-run setup link\n  --reset-admin   reset the administrator PIN\n  --uninstall     remove the application and its settings")
+		showInfo("Playground Control " + buildinfo.Version + "\n\nDouble-click to install or open the dashboard.\n\nLocal administrator recovery:\n  --setup         recreate the first-run setup link\n  --reset-admin   reset the administrator PIN\n  --repair        reinstall components and keep all data\n  --reinstall     full reset and fresh installation\n  --uninstall     remove the application and its settings")
 	default:
 		commandInteractive()
 	}

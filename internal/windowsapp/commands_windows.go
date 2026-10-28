@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/buildinfo"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/store"
 )
@@ -30,30 +31,16 @@ func commandDenyLaunch() {
 }
 
 func commandInteractive() {
-	if isInstalled() {
-		if !serviceHealthy() {
-			if !isElevated() {
-				if err := elevateSelf("--start"); err != nil {
-					showError("The dashboard is not responding. Administrator approval is required to start the service.\n\n" + err.Error())
-				}
-				return
-			}
-			if err := startService(); err != nil {
-				showError("Could not start the Playground Control service.\n\n" + err.Error())
-				return
-			}
-			if err := waitForHealth(20 * time.Second); err != nil {
-				showError("The service started but the dashboard did not respond.\n\n" + err.Error())
-				return
-			}
+	if isInstalled() && serviceHealthy() {
+		installed := installedVersion()
+		if installed != "" && (strings.EqualFold(installed, buildinfo.Version) || strings.EqualFold(buildinfo.Version, "dev")) {
+			finishInstalledFlow()
+			return
 		}
-		finishInstalledFlow()
-		return
 	}
-
 	if !isElevated() {
 		if err := elevateSelf("--install"); err != nil {
-			showError("Administrator approval is required to install Playground Control.\n\n" + err.Error())
+			showError("Administrator approval is required to install or repair Playground Control.\n\n" + err.Error())
 		}
 		return
 	}
@@ -67,18 +54,114 @@ func commandInstall() {
 		}
 		return
 	}
-	if exists, err := serviceExists(); err != nil {
-		showError("Could not inspect the installed service.\n\n" + err.Error())
+	if handled, err := relaunchSetupFromTemp(modeAuto); err != nil {
+		showError("Could not start the setup process from a temporary location.\n\n" + err.Error())
 		return
-	} else if exists {
+	} else if handled {
+		return
+	}
+	outcome, err := runSetupWorkflow(modeAuto)
+	if err != nil {
+		showError("Setup could not start.\n\n" + err.Error())
+		return
+	}
+	if outcome == outcomeInstalled || outcome == outcomeAlreadyRunning {
 		finishInstalledFlow()
+	}
+}
+
+func commandRepair() {
+	if !isElevated() {
+		if err := elevateSelf("--repair"); err != nil {
+			showError("Administrator approval is required to repair Playground Control.\n\n" + err.Error())
+		}
 		return
 	}
-	if err := installApplication(); err != nil {
-		showError("Playground Control could not be installed.\n\n" + err.Error())
+	if handled, err := relaunchSetupFromTemp(modeRepair); err != nil {
+		showError("Could not start the repair process from a temporary location.\n\n" + err.Error())
+		return
+	} else if handled {
 		return
 	}
-	finishInstalledFlow()
+	outcome, err := runSetupWorkflow(modeRepair)
+	if err != nil {
+		showError("Repair could not start.\n\n" + err.Error())
+		return
+	}
+	if outcome == outcomeInstalled || outcome == outcomeAlreadyRunning {
+		finishInstalledFlow()
+	}
+}
+
+func commandReinstall() {
+	if !isElevated() {
+		if err := elevateSelf("--reinstall"); err != nil {
+			showError("Administrator approval is required to reinstall Playground Control.\n\n" + err.Error())
+		}
+		return
+	}
+	if handled, err := relaunchSetupFromTemp(modeFullReset); err != nil {
+		showError("Could not start the reinstall process from a temporary location.\n\n" + err.Error())
+		return
+	} else if handled {
+		return
+	}
+	outcome, err := runSetupWorkflow(modeFullReset)
+	if err != nil {
+		showError("Reinstall could not start.\n\n" + err.Error())
+		return
+	}
+	if outcome == outcomeInstalled || outcome == outcomeAlreadyRunning {
+		finishInstalledFlow()
+	}
+}
+
+func runSetupWorkflow(force installMode) (setupOutcome, error) {
+	var outcome setupOutcome
+	err := runSetupUI(func(ui setupUI) {
+		log := newInstallLog(ui)
+		defer log.Close()
+		backend := &windowsInstallBackend{log: log}
+		outcome = runInstallFlow(backend, log, force)
+	})
+	if exe, exeErr := selfExe(); exeErr == nil && pathInside(exe, os.TempDir()) && strings.Contains(filepath.Base(exe), "PlaygroundControl-uninstall-") {
+		_ = scheduleDeleteOnReboot(exe)
+	}
+	return outcome, err
+}
+
+func relaunchSetupFromTemp(mode installMode) (bool, error) {
+	exe, err := selfExe()
+	if err != nil {
+		return false, err
+	}
+	if !pathInside(exe, installDir()) {
+		return false, nil
+	}
+	if mode == modeAuto && serviceHealthy() {
+		installed := installedVersion()
+		if installed != "" && (strings.EqualFold(installed, buildinfo.Version) || strings.EqualFold(buildinfo.Version, "dev")) {
+			return false, nil
+		}
+	}
+	tempExe, err := copySelfToTemp()
+	if err != nil {
+		return false, fmt.Errorf("copy setup executable: %w", err)
+	}
+	arg := "--install"
+	switch mode {
+	case modeRepair:
+		arg = "--repair"
+	case modeFullReset:
+		arg = "--reinstall"
+	}
+	cmd := exec.Command(tempExe, arg)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(tempExe)
+		return false, fmt.Errorf("start temporary setup executable: %w", err)
+	}
+	return true, nil
 }
 
 func commandStart() {
@@ -98,10 +181,8 @@ func commandStart() {
 		return
 	}
 	if !exists {
-		if err := installApplication(); err != nil {
-			showError("The service registration is missing and could not be repaired.\n\n" + err.Error())
-			return
-		}
+		commandInstall()
+		return
 	} else {
 		if err := startService(); err != nil {
 			showError("Could not start the Playground Control service.\n\n" + err.Error())
