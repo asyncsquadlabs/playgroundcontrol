@@ -670,14 +670,14 @@ func TestAISettingsEndpointsNeverExposeKey(t *testing.T) {
 		t.Fatalf("enable without key status = %d body=%s", result.status, result.body)
 	}
 
-	const apiKey = "sk-distinctive-test-key-1234"
+	const testValue = "distinctive-test-key-1234"
 	result = app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
-		"enabled": true, "autoBlock": true, "model": "deepseek-flash", "apiKey": apiKey,
+		"enabled": true, "autoBlock": true, "model": "deepseek-flash", "apiKey": testValue,
 	}, csrf, "")
 	if result.status != http.StatusOK {
 		t.Fatalf("AI settings status = %d body=%s", result.status, result.body)
 	}
-	if bytes.Contains(result.body, []byte(apiKey)) {
+	if bytes.Contains(result.body, []byte(testValue)) {
 		t.Fatal("AI settings response contained the API key")
 	}
 
@@ -685,7 +685,7 @@ func TestAISettingsEndpointsNeverExposeKey(t *testing.T) {
 	if result.status != http.StatusOK {
 		t.Fatalf("state status = %d body=%s", result.status, result.body)
 	}
-	if bytes.Contains(result.body, []byte(apiKey)) {
+	if bytes.Contains(result.body, []byte(testValue)) {
 		t.Fatal("state response contained the API key")
 	}
 	state := decodeMap(t, result.body)
@@ -712,7 +712,7 @@ func TestAISettingsEndpointsNeverExposeKey(t *testing.T) {
 	if result.status != http.StatusBadGateway {
 		t.Fatalf("failed AI test status = %d body=%s", result.status, result.body)
 	}
-	if bytes.Contains(result.body, []byte(apiKey)) {
+	if bytes.Contains(result.body, []byte(testValue)) {
 		t.Fatal("AI test failure response contained the API key")
 	}
 
