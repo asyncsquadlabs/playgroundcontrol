@@ -1,5 +1,5 @@
 SHELL := /bin/sh
-VERSION ?= 1.2.2
+VERSION ?= 1.3.0
 GO ?= go
 GO_WINRES ?= go-winres
 GOVULNCHECK ?= govulncheck

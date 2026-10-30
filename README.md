@@ -10,7 +10,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 
 ## Status
 
-- **Version:** 1.2.2
+- **Version:** 1.3.0
 - **Target:** Windows 10/11 x64
 - **Distribution:** single self-installing EXE
 - **Runtime:** Go 1.26.10 or later required for source builds
@@ -46,7 +46,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 
 ## Quick start (Windows)
 
-1. Download `PlaygroundControl-1.2.2-win-x64.zip` from the repository's Releases page.
+1. Download `PlaygroundControl-1.3.0-win-x64.zip` from the repository's Releases page.
 2. Verify the SHA-256 shown in the release notes.
 3. Extract the ZIP to a local folder.
 4. Run `PlaygroundControl.exe` and approve the UAC prompt. If Windows SmartScreen appears, verify the hash before choosing **More info → Run anyway**. The setup window shows each installation step; when an older version is detected, choose **Repair / keep data** to upgrade in place.
@@ -54,7 +54,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 6. Open the dashboard from a phone on the same private LAN using the URL shown by setup.
 7. Read [TESTING.html](TESTING.html) for the 28-item acceptance test.
 
-If an earlier build is already installed, run the 1.2.2 installer and choose **Repair / keep data** to upgrade in place. The installer uses a live setup window, preserves `C:\ProgramData\PlaygroundControl`, and reports the exact Windows service error if startup fails. Choose **Full reset** only when you intentionally want to delete the PIN, games, play state, and history. A preserved 1.0.x ProgramData directory is still imported into SQLite once and the old files are archived as `*.migrated`.
+If an earlier build is already installed, run the 1.3.0 installer and choose **Repair / keep data** to upgrade in place. The installer uses a live setup window, preserves `C:\ProgramData\PlaygroundControl`, and reports the exact Windows service error if startup fails. Choose **Full reset** only when you intentionally want to delete the PIN, games, play state, and history. A preserved 1.0.x ProgramData directory is still imported into SQLite once and the old files are archived as `*.migrated`.
 
 ## How it works
 
