@@ -1245,7 +1245,7 @@
         </svg>
       </span>
       <p class="brand-name">Playground Control</p>
-      <span class="release-chip">v1.3.0</span>
+      <span class="release-chip">v1.4.0</span>
       <span class="release-chip">Windows 10/11 x64</span>
       <span class="mini-chip">Acceptance guide</span>
     </div>
@@ -1262,8 +1262,8 @@
           <a class="button ghost" href="dist/PlaygroundControl.exe" download>Get the EXE</a>
         </div>
         <div class="hero-meta">
-          <span>28 test items</span>
-          <span>About 70-95 minutes</span>
+          <span>33 test items</span>
+          <span>About 85-115 minutes</span>
           <span>Destructive uninstall test at the end</span>
         </div>
       </div>
@@ -1272,7 +1272,7 @@
         <p class="artifact-label">Release artifact</p>
         <p class="artifact-name">PlaygroundControl.exe</p>
         <dl class="artifact-meta">
-          <dt>Build</dt><dd>1.3.0, single self-installing EXE</dd>
+          <dt>Build</dt><dd>1.4.0, single self-installing EXE</dd>
           <dt>Target</dt><dd>Windows 10/11 x64, no runtime install</dd>
           <dt>Size</dt><dd>About 12 MiB</dd>
           <dt>Status</dt><dd>Unsigned test build</dd>
@@ -1297,6 +1297,7 @@
       <a href="#first-run">First run</a>
       <a href="#enforcement">Enforcement</a>
       <a href="#ai-monitoring">AI monitoring</a>
+      <a href="#browser-monitoring">Browser monitoring</a>
       <a href="#lan-security">LAN/security</a>
       <a href="#uninstall">Uninstall</a>
       <a href="#troubleshooting">Troubleshoot</a>
@@ -1333,6 +1334,7 @@
       <a href="#first-run"><span class="step-dot">2</span>First run and PIN</a>
       <a href="#enforcement"><span class="step-dot">3</span>Play enforcement</a>
       <a href="#ai-monitoring"><span class="step-dot">3A</span>AI monitoring</a>
+      <a href="#browser-monitoring"><span class="step-dot">3B</span>Browser monitoring</a>
       <a href="#lan-security"><span class="step-dot">4</span>LAN and security</a>
       <a href="#uninstall"><span class="step-dot">5</span>Uninstall</a>
       <a href="#troubleshooting"><span class="step-dot">?</span>Troubleshooting</a>
@@ -1542,7 +1544,7 @@ Get-NetFirewallRule -DisplayName 'Playground Control' -ErrorAction SilentlyConti
 # Expected shape:
 # {
 #   "ok": true,
-#   "version": "1.3.0",
+#   "version": "1.4.0",
 #   "setup": true
 # }</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
@@ -1886,6 +1888,96 @@ Start-Sleep -Seconds 2
               <h3 class="test-title">Confirm AI is idle while play is allowed and errors stay visible</h3>
               <p class="test-body">Allow play and launch an unlisted game; wait at least 30 seconds. Then re-enable AI, temporarily block outbound HTTPS, and return to blocked play. Mark a finding <strong>Not a game</strong>.</p>
               <div class="expected"><strong>Expected</strong>No new Strange activity or auto-block appears while play is allowed. An unreachable DeepSeek endpoint produces a visible AI error and warning without crashing the service or affecting Roblox/game enforcement. Not a game removes the finding, writes an ignore entry, and records an audit event; the ignored executable/path is not sent to DeepSeek again. No network request contains window titles, command lines, usernames, or full unredacted user-profile paths.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+
+    <section id="browser-monitoring">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 3B</p>
+          <h2>Browser monitoring</h2>
+          <p>These checks prove Chrome and Edge game domains are detected from history, enforced through policies and hosts, and removed cleanly when play is allowed or the product is uninstalled. Detection is retrospective in 1.4.0; an already-open tab may survive until reload.</p>
+        </div>
+        <span class="section-count">5 tests</span>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">03B</span>
+          <div><h3>Verify seed blocking, AI review, allowlisting, and restoration</h3><p>Use a standard player account with Chrome or Edge. Keep play blocked for the blocking checks. Confirm scheduled detection within about 30 seconds.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="browser-seed" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="browser-seed">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark browser seed blocking test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">B.1</span><span class="level essential">Essential</span><span class="time">8 min</span></div>
+              <h3 class="test-title">Block a seed domain in Chrome and Edge while play is blocked</h3>
+              <p class="test-body">Enable <strong>Browser monitoring</strong> and keep play blocked. In Chrome, open <code>https://poki.com</code>. Wait up to 30 seconds, then reload or navigate to the domain again. Repeat with <code>https://crazygames.com</code> in Edge.</p>
+              <div class="expected"><strong>Expected</strong>The dashboard lists <code>poki.com</code> and <code>crazygames.com</code> as Seed domains with last-seen times. Both Chrome and Edge <code>URLBlocklist</code> policies contain the domains, the hosts file has a marked block, and the next navigation or reload is denied. An already-open tab may remain until reload. Audit history records the seed block and browser controls.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="browser-nongame" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="browser-nongame">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark browser non-game exclusion test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">B.2</span><span class="level essential">Essential</span><span class="time">5 min</span></div>
+              <h3 class="test-title">Confirm search, video, education, and Family Link remain usable</h3>
+              <p class="test-body">With browser monitoring active and play blocked, open Google Search, YouTube, Google Classroom, and Family Link in both browsers. Wait at least 30 seconds after the visits.</p>
+              <div class="expected"><strong>Expected</strong>None of those domains appears in the blocked list, and all remain reachable. No seed or AI verdict blocks <code>google.com</code>, <code>youtube.com</code>, or education/family-safety pages.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="browser-ai" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="browser-ai">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark browser AI classification test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">B.3</span><span class="level advanced">Advanced</span><span class="time">8 min</span></div>
+              <h3 class="test-title">Classify an unknown game domain and review a lower-confidence finding</h3>
+              <p class="test-body">With a saved DeepSeek key, check <strong>Ask DeepSeek about unknown domains</strong>, save, and visit a game domain that is not in the seed list, such as <code>slither.io</code>. Also confirm the network payload contains only the domain. If a lower-confidence finding appears, use Block or Allow on it.</p>
+              <div class="expected"><strong>Expected</strong>A high-confidence game domain is auto-blocked with an AI badge and enforced through the normal controls; 70-89% findings appear under Needs review. Only the registrable domain is sent to DeepSeek; no full URL, path, query string, title, or profile path is stored or transmitted. AI errors are visible without stopping seed blocking.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="browser-allow" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="browser-allow">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark browser allowlist test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">B.4</span><span class="level essential">Essential</span><span class="time">7 min</span></div>
+              <h3 class="test-title">Allow a blocked domain, verify persistence, then allow play and block it again</h3>
+              <p class="test-body">Choose <strong>Allow</strong> on a blocked seed domain. Reload that domain and wait at least 30 seconds. Then allow play and verify the domain still loads. Block play again and verify enforcement returns.</p>
+              <div class="expected"><strong>Expected</strong>The domain moves to Allowed, is no longer enforced, and is not automatically re-blocked by later seed or AI detections. Allowing play removes Playground Control-managed URLBlocklist entries, the hosts marker, and DoH overrides; blocking play again re-applies the remaining blocked domains.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="browser-restore" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="browser-restore">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark browser policy/hosts restoration test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">B.5</span><span class="level advanced">Advanced</span><span class="time">12 min</span></div>
+              <h3 class="test-title">Preserve unrelated policies and hosts content, then restore on uninstall</h3>
+              <p class="test-body">Before enabling browser monitoring, add a harmless existing entry such as <code>example.invalid</code> under the Chrome <code>URLBlocklist</code> policy and a comment line in the hosts file. Record both files. Enable blocking, verify the unrelated entries remain, then run uninstall or full reset.</p>
+              <div class="expected"><strong>Expected</strong>Unrelated <code>URLBlocklist</code> values and hosts lines are preserved while active. Uninstall/reset removes only Playground Control-managed values and the marked hosts block, restores the original DoH policy values, and leaves any unrelated external edits. If the hosts file is locked, the dashboard shows an error and application data is retained for a retry.</div>
             </div>
           </article>
         </div>
@@ -2264,7 +2356,7 @@ make sign SIGN_CMD='signtool sign /fd SHA256 /tr http://timestamp.digicert.com /
     </section>
 
     <footer>
-      <p>Playground Control v1.3.0 acceptance guide. Generated for the current release artifact.</p>
+      <p>Playground Control v1.4.0 acceptance guide. Generated for the current release artifact.</p>
       <p>This page is self-contained and does not load remote fonts, scripts, images, or analytics. Use Print / save PDF for an offline copy.</p>
     </footer>
   </main>

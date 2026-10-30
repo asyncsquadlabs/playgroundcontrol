@@ -61,6 +61,7 @@ type AuditEvent struct {
 	ActorIP  string    `json:"actorIp,omitempty"`
 	GameID   string    `json:"gameId,omitempty"`
 	GameName string    `json:"gameName,omitempty"`
+	Domain   string    `json:"domain,omitempty"`
 	PID      uint32    `json:"pid,omitempty"`
 	Result   string    `json:"result,omitempty"`
 }

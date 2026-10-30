@@ -157,67 +157,9 @@ func (c *Client) Classify(ctx context.Context, apiKey, modelName string, observa
 	payload := struct {
 		Processes []Observation `json:"processes"`
 	}{Processes: cleaned}
-	userData, err := json.Marshal(payload)
+	content, err := c.complete(ctx, apiKey, modelName, systemPrompt, payload)
 	if err != nil {
-		return nil, fmt.Errorf("encode DeepSeek request: %w", err)
-	}
-	request := chatRequest{
-		Model: modelName,
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: string(userData)},
-		},
-		ResponseFormat: responseFormat{Type: "json_object"},
-		Thinking:       thinkingMode{Type: "disabled"},
-		Temperature:    0,
-		MaxTokens:      4096,
-		Stream:         false,
-	}
-	body, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("encode DeepSeek request: %w", err)
-	}
-
-	// #nosec G107 -- NewClient always uses the fixed DeepSeek endpoint; only tests inject a local server.
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create DeepSeek request: %w", err)
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+apiKey)
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "application/json")
-	httpRequest.Header.Set("User-Agent", "PlaygroundControl")
-
-	response, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, fmt.Errorf("DeepSeek request failed: %w", sanitizeError(err))
-	}
-	defer response.Body.Close()
-
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read DeepSeek response: %w", err)
-	}
-	if len(responseBody) > maxResponseBytes {
-		return nil, errors.New("DeepSeek response exceeded the size limit")
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, providerError(response.StatusCode, responseBody)
-	}
-
-	var decoded chatResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return nil, fmt.Errorf("decode DeepSeek response: %w", err)
-	}
-	if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
-		return nil, fmt.Errorf("DeepSeek API error: %s", sanitizeProviderMessage(decoded.Error.Message))
-	}
-	if len(decoded.Choices) == 0 {
-		return nil, errors.New("DeepSeek returned no completion choices")
-	}
-	content := extractJSON(decoded.Choices[0].Message.Content)
-	if content == "" {
-		return nil, errors.New("DeepSeek returned an empty classification")
+		return nil, err
 	}
 	var envelope resultEnvelope
 	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
@@ -269,6 +211,83 @@ func (c *Client) Test(ctx context.Context, apiKey, modelName string) (time.Durat
 		return latency, errors.New("DeepSeek returned no verdict for the test process")
 	}
 	return latency, nil
+}
+
+// complete sends one JSON-object chat request and returns the extracted JSON
+// content from the first choice.
+func (c *Client) complete(ctx context.Context, apiKey, modelName, prompt string, payload any) (string, error) {
+	if c == nil || c.httpClient == nil {
+		return "", errors.New("DeepSeek client is not configured")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return "", errors.New("DeepSeek API key is missing")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return "", errors.New("DeepSeek model is missing")
+	}
+	userData, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode DeepSeek request: %w", err)
+	}
+	request := chatRequest{
+		Model: modelName,
+		Messages: []chatMessage{
+			{Role: "system", Content: prompt},
+			{Role: "user", Content: string(userData)},
+		},
+		ResponseFormat: responseFormat{Type: "json_object"},
+		Thinking:       thinkingMode{Type: "disabled"},
+		Temperature:    0,
+		MaxTokens:      4096,
+		Stream:         false,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("encode DeepSeek request: %w", err)
+	}
+
+	// #nosec G107 -- NewClient always uses the fixed DeepSeek endpoint; only tests inject a local server.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create DeepSeek request: %w", err)
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+apiKey)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("User-Agent", "PlaygroundControl")
+
+	response, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return "", fmt.Errorf("DeepSeek request failed: %w", sanitizeError(err))
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read DeepSeek response: %w", err)
+	}
+	if len(responseBody) > maxResponseBytes {
+		return "", errors.New("DeepSeek response exceeded the size limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", providerError(response.StatusCode, responseBody)
+	}
+
+	var decoded chatResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return "", fmt.Errorf("decode DeepSeek response: %w", err)
+	}
+	if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
+		return "", fmt.Errorf("DeepSeek API error: %s", sanitizeProviderMessage(decoded.Error.Message))
+	}
+	if len(decoded.Choices) == 0 {
+		return "", errors.New("DeepSeek returned no completion choices")
+	}
+	content := extractJSON(decoded.Choices[0].Message.Content)
+	if content == "" {
+		return "", errors.New("DeepSeek returned an empty classification")
+	}
+	return content, nil
 }
 
 func providerError(status int, body []byte) error {

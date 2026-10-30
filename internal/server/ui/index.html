@@ -156,6 +156,74 @@
           <p id="aiError" class="hint ai-error" hidden></p>
         </section>
 
+        <section class="panel browser-panel" aria-labelledby="browserTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Optional Chrome and Edge monitoring</p>
+              <h2 id="browserTitle">Browser monitoring</h2>
+            </div>
+            <span id="browserStatusBadge" class="ai-badge off">Off</span>
+          </div>
+          <p id="browserStatusText" class="hint">Chrome and Edge history is not monitored.</p>
+          <form id="browserForm" class="compact-form" novalidate>
+            <label class="checkbox-row" for="browserEnabled">
+              <input id="browserEnabled" name="browserEnabled" type="checkbox">
+              <span>Detect browser game domains while play is blocked</span>
+            </label>
+            <label class="checkbox-row" for="browserAutoBlock">
+              <input id="browserAutoBlock" name="browserAutoBlock" type="checkbox">
+              <span>Automatically block AI-confirmed game domains</span>
+            </label>
+            <label class="checkbox-row" for="browserAI">
+              <input id="browserAI" name="browserAI" type="checkbox">
+              <span>Ask DeepSeek about unknown domains (domain only)</span>
+            </label>
+            <p class="hint">History polling is retrospective: a game tab may stay open until it reloads or navigates. Only the registrable domain is stored or sent to DeepSeek; full URLs, paths, page titles, and profile paths are never used. Policies and hosts entries are active only while play is blocked.</p>
+            <div class="button-row">
+              <button type="submit" class="secondary">Save browser settings</button>
+            </div>
+          </form>
+          <div id="browserControlState" class="browser-state"></div>
+
+          <div class="browser-grid">
+            <div>
+              <div class="panel-heading">
+                <h3>Blocked domains</h3>
+                <span id="blockedDomainCount" class="count"></span>
+              </div>
+              <div id="blockedDomainList" class="item-list"></div>
+              <p id="blockedDomainEmpty" class="empty" hidden>No browser game domains are blocked.</p>
+              <form id="browserDomainForm" class="compact-form" novalidate>
+                <h3>Add a domain</h3>
+                <label for="browserDomain">Domain</label>
+                <input id="browserDomain" name="browserDomain" type="text" maxlength="255" autocomplete="off" spellcheck="false" placeholder="example.com" required>
+                <p class="hint">A parent-added domain is blocked while play is off. Its subdomains are covered.</p>
+                <button type="submit" class="secondary">Block domain</button>
+              </form>
+            </div>
+            <div>
+              <div class="panel-heading">
+                <h3>Needs review</h3>
+                <span id="reviewDomainCount" class="count"></span>
+              </div>
+              <div id="reviewDomainList" class="item-list"></div>
+              <p id="reviewDomainEmpty" class="empty" hidden>No browser findings need review.</p>
+              <p class="hint">DeepSeek findings between 70% and 89% confidence wait here. Choose Block or Allow.</p>
+            </div>
+          </div>
+
+          <details class="browser-allowed-details">
+            <summary>Allowed domains (<span id="allowedDomainCount">0</span>)</summary>
+            <div id="allowedDomainList" class="item-list"></div>
+            <p id="allowedDomainEmpty" class="empty" hidden>No browser domains are allowlisted.</p>
+            <p class="hint">Allowed domains stay unblocked across future seed and AI detections until you block them again.</p>
+          </details>
+
+          <h3 class="subsection-title">Recent browser detections</h3>
+          <div id="browserDetectionList" class="event-list"></div>
+          <p id="browserDetectionEmpty" class="empty" hidden>No browser domains detected yet.</p>
+        </section>
+
         <section class="panel" aria-labelledby="strangeTitle">
           <div class="panel-heading">
             <div>

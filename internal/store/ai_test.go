@@ -97,7 +97,7 @@ func TestAISettingsAreSealedPersistedAndRedacted(t *testing.T) {
 	}
 }
 
-func TestStoreMigratesV1ToV2PreservingGames(t *testing.T) {
+func TestStoreMigratesV1ToV3PreservingGames(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, databaseFileName))
 	if err != nil {
@@ -133,8 +133,8 @@ func TestStoreMigratesV1ToV2PreservingGames(t *testing.T) {
 	if err := st.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
 	}
 	if cfg := st.Config(); len(cfg.Games) != 1 || cfg.Games[0].Name != "Existing" ||
 		cfg.Games[0].Source != model.GameSourceParent || !cfg.PlayAllowed {
@@ -146,6 +146,13 @@ func TestStoreMigratesV1ToV2PreservingGames(t *testing.T) {
 	var ignoredTable int
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_ignored'`).Scan(&ignoredTable); err != nil || ignoredTable != 1 {
 		t.Fatalf("ai_ignored table missing: count=%d err=%v", ignoredTable, err)
+	}
+	var browserTable int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'browser_domains'`).Scan(&browserTable); err != nil || browserTable != 1 {
+		t.Fatalf("browser_domains table missing: count=%d err=%v", browserTable, err)
+	}
+	if settings := st.BrowserSettings(); settings.Enabled || !settings.AutoBlock || settings.AIClassification {
+		t.Fatalf("unexpected default browser settings: %+v", settings)
 	}
 }
 

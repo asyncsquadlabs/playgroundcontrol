@@ -39,11 +39,13 @@ type Store struct {
 	mu         sync.RWMutex
 	cfg        model.Config
 	ai         model.AISettings
+	browser    model.BrowserSettings
 	aiKey      string
 	loadNotice string
 
 	auditMu   sync.Mutex
 	strangeMu sync.Mutex
+	browserMu sync.Mutex
 	backupMu  sync.Mutex
 
 	closeOnce sync.Once
@@ -76,6 +78,7 @@ func OpenWithCodec(dir string, now func() time.Time, codec secret.Codec) (*Store
 		codec:      codec,
 		cfg:        model.DefaultConfig(),
 		ai:         model.DefaultAISettings(),
+		browser:    model.DefaultBrowserSettings(),
 	}
 	db, notice, err := s.openDatabase()
 	if err != nil {
@@ -90,6 +93,9 @@ func OpenWithCodec(dir string, now func() time.Time, codec secret.Codec) (*Store
 	}
 	if err := s.loadAISettings(); err != nil {
 		s.appendNotice(fmt.Sprintf("AI settings could not be loaded: %v", err))
+	}
+	if err := s.loadBrowserSettings(); err != nil {
+		s.appendNotice(fmt.Sprintf("Browser monitoring settings could not be loaded: %v", err))
 	}
 	return s, nil
 }
@@ -434,14 +440,15 @@ func (s *Store) AddEvent(event model.AuditEvent) error {
 	}
 
 	_, err := s.db.Exec(
-		`INSERT INTO audit_events (time, type, message, actor_ip, game_id, game_name, pid, result)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO audit_events (time, type, message, actor_ip, game_id, game_name, domain, pid, result)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		formatTime(event.Time),
 		event.Type,
 		event.Message,
 		event.ActorIP,
 		event.GameID,
 		event.GameName,
+		event.Domain,
 		int64(event.PID),
 		event.Result,
 	)
@@ -471,7 +478,7 @@ func (s *Store) RecentEvents(limit int) ([]model.AuditEvent, error) {
 	defer s.auditMu.Unlock()
 
 	rows, err := s.db.Query(
-		`SELECT time, type, message, actor_ip, game_id, game_name, pid, result
+		`SELECT time, type, message, actor_ip, game_id, game_name, domain, pid, result
 		 FROM audit_events ORDER BY seq DESC LIMIT ?`,
 		limit,
 	)
@@ -485,7 +492,7 @@ func (s *Store) RecentEvents(limit int) ([]model.AuditEvent, error) {
 		var event model.AuditEvent
 		var when string
 		var pid int64
-		if err := rows.Scan(&when, &event.Type, &event.Message, &event.ActorIP, &event.GameID, &event.GameName, &pid, &event.Result); err != nil {
+		if err := rows.Scan(&when, &event.Type, &event.Message, &event.ActorIP, &event.GameID, &event.GameName, &event.Domain, &pid, &event.Result); err != nil {
 			return nil, fmt.Errorf("read audit event: %w", err)
 		}
 		event.Time = parseTime(when)

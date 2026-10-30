@@ -435,6 +435,16 @@ button.small-danger {
   letter-spacing: 0.04em;
 }
 
+.item-badge.seed {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.item-badge.manual {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
 .empty {
   margin: 0;
   padding: 0.95rem;
@@ -538,6 +548,53 @@ button.small-secondary {
   white-space: nowrap;
 }
 
+.browser-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.browser-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0.25rem;
+}
+
+.state-chip {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.domain-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.browser-allowed-details {
+  margin: 1.1rem 0;
+  padding: 0.85rem 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.browser-allowed-details summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.browser-allowed-details .item-list {
+  margin-top: 0.75rem;
+}
+
 .event-list {
   display: grid;
   gap: 0.45rem;
@@ -629,6 +686,10 @@ footer {
 
   .dashboard-grid {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  }
+
+  .browser-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .panel {

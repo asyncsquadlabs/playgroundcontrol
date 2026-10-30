@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
 
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/aiwatch"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/browsercontrol"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/browserwatch"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/buildinfo"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/deepseek"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/enforce"
@@ -29,10 +32,13 @@ type runtimeApp struct {
 	auth         *auth.Manager
 	enforcer     *enforce.Enforcer
 	aiWatcher    *aiwatch.Watcher
+	browserWatch *browserwatch.Watcher
+	browser      *browsercontrol.Manager
 	httpServer   *http.Server
 	cancel       context.CancelFunc
 	enforcerDone chan struct{}
 	aiDone       chan struct{}
+	browserDone  chan struct{}
 }
 
 func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, error) {
@@ -105,6 +111,11 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		CloseGrace:   enforce.DefaultCloseGrace,
 	})
 	aiWatcher := aiwatch.New(source, st, st, deepseek.NewClient(), st, st, engine, aiwatch.Options{})
+	browserManager := browsercontrol.NewManager(st, browsercontrol.NewWindowsApplier(dataDir()), st, browsercontrol.Options{})
+	browserWatcher := browserwatch.New(browserwatch.NewHistorySource(dataDir()), st, st, deepseek.NewClient(), st, browserManager, st, browserwatch.Options{})
+	if err := browserManager.Sync(); err != nil {
+		logger.Warningf("browser controls could not be synchronized: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	engineDone := make(chan struct{})
@@ -117,6 +128,21 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		defer close(aiDone)
 		aiWatcher.Run(ctx)
 	}()
+	browserDone := make(chan struct{})
+	go func() {
+		defer close(browserDone)
+		var wait sync.WaitGroup
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			browserManager.Run(ctx)
+		}()
+		go func() {
+			defer wait.Done()
+			browserWatcher.Run(ctx)
+		}()
+		wait.Wait()
+	}()
 
 	reportPhase(startupPhaseListener)
 	httpAPI := server.New(server.Options{
@@ -124,12 +150,14 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		Version:     buildinfo.Version,
 		LaunchGuard: launchGuard,
 		AI:          aiWatcher,
+		Browser:     browserManager,
 	}, st, authManager, engine)
 	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", server.Port))
 	if err != nil {
 		cancel()
 		<-engineDone
 		<-aiDone
+		<-browserDone
 		return nil, fmt.Errorf("listen on TCP %d: %w", server.Port, err)
 	}
 	httpServer := &http.Server{
@@ -147,10 +175,13 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		auth:         authManager,
 		enforcer:     engine,
 		aiWatcher:    aiWatcher,
+		browserWatch: browserWatcher,
+		browser:      browserManager,
 		httpServer:   httpServer,
 		cancel:       cancel,
 		enforcerDone: engineDone,
 		aiDone:       aiDone,
+		browserDone:  browserDone,
 	}
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -194,6 +225,13 @@ func (a *runtimeApp) Shutdown() {
 		case <-a.aiDone:
 		case <-time.After(5 * time.Second):
 			a.logger.Warningf("AI monitoring loop did not stop within the timeout")
+		}
+	}
+	if a.browserDone != nil {
+		select {
+		case <-a.browserDone:
+		case <-time.After(5 * time.Second):
+			a.logger.Warningf("browser monitoring loop did not stop within the timeout")
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

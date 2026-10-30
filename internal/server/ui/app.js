@@ -48,6 +48,26 @@
     aiRemoveKeyButton: document.getElementById("aiRemoveKeyButton"),
     aiLastVerified: document.getElementById("aiLastVerified"),
     aiError: document.getElementById("aiError"),
+    browserStatusBadge: document.getElementById("browserStatusBadge"),
+    browserStatusText: document.getElementById("browserStatusText"),
+    browserForm: document.getElementById("browserForm"),
+    browserEnabled: document.getElementById("browserEnabled"),
+    browserAutoBlock: document.getElementById("browserAutoBlock"),
+    browserAI: document.getElementById("browserAI"),
+    browserControlState: document.getElementById("browserControlState"),
+    blockedDomainCount: document.getElementById("blockedDomainCount"),
+    blockedDomainList: document.getElementById("blockedDomainList"),
+    blockedDomainEmpty: document.getElementById("blockedDomainEmpty"),
+    reviewDomainCount: document.getElementById("reviewDomainCount"),
+    reviewDomainList: document.getElementById("reviewDomainList"),
+    reviewDomainEmpty: document.getElementById("reviewDomainEmpty"),
+    allowedDomainCount: document.getElementById("allowedDomainCount"),
+    allowedDomainList: document.getElementById("allowedDomainList"),
+    allowedDomainEmpty: document.getElementById("allowedDomainEmpty"),
+    browserDetectionList: document.getElementById("browserDetectionList"),
+    browserDetectionEmpty: document.getElementById("browserDetectionEmpty"),
+    browserDomainForm: document.getElementById("browserDomainForm"),
+    browserDomain: document.getElementById("browserDomain"),
     strangeActivityList: document.getElementById("strangeActivityList"),
     strangeActivityEmpty: document.getElementById("strangeActivityEmpty"),
     strangeCount: document.getElementById("strangeCount"),
@@ -67,9 +87,13 @@
   let dashboardPoll = null;
   let eventPoll = null;
   let strangePoll = null;
+  let browserPoll = null;
   let refreshing = false;
   let setupTokenFromURL = "";
   let strangeActivity = [];
+  let browserDomains = { blocked: [], review: [], allowed: [] };
+  let browserDetections = [];
+  let browserFormDirty = false;
 
   class APIError extends Error {
     constructor(message, status, code) {
@@ -177,6 +201,13 @@
         }
       }, 5000);
     }
+    if (!browserPoll) {
+      browserPoll = window.setInterval(() => {
+        if (!document.hidden && !views.dashboard.hidden) {
+          loadBrowserData();
+        }
+      }, 10000);
+    }
   }
 
   function stopDashboard() {
@@ -192,8 +223,15 @@
       window.clearInterval(strangePoll);
       strangePoll = null;
     }
+    if (browserPoll) {
+      window.clearInterval(browserPoll);
+      browserPoll = null;
+    }
     currentState = null;
     strangeActivity = [];
+    browserDomains = { blocked: [], review: [], allowed: [] };
+    browserDetections = [];
+    browserFormDirty = false;
   }
 
   async function init() {
@@ -244,7 +282,7 @@
     renderState(state);
     syncAIForm(state.ai || {});
     startPolling();
-    await Promise.all([loadEvents(), loadStrangeActivity()]);
+    await Promise.all([loadEvents(), loadStrangeActivity(), loadBrowserData()]);
   }
 
   function showLogin(message) {
@@ -325,6 +363,7 @@
     renderWarnings(state);
     renderEnforcement(state);
     renderAIStatus(state.ai || {});
+    renderBrowser(state.browser || {});
     renderLANURLs(state.lanUrls);
   }
 
@@ -373,6 +412,258 @@
     ui.aiModel.value = ai.model || "deepseek-flash";
     ui.aiKey.value = "";
     ui.aiKey.placeholder = ai.keyConfigured ? "Leave blank to keep the configured key" : "Enter a DeepSeek API key";
+  }
+
+  function renderBrowser(browser) {
+    const settings = browser.settings || {};
+    const status = browser.status || {};
+    const enabled = Boolean(settings.enabled);
+    let badge = "Off";
+    let badgeClass = "off";
+    if (enabled && status.lastError) {
+      badge = "Error";
+      badgeClass = "error";
+    } else if (enabled) {
+      badge = status.active ? "Active" : "Idle";
+      badgeClass = "on";
+    }
+    ui.browserStatusBadge.textContent = badge;
+    ui.browserStatusBadge.className = "ai-badge " + badgeClass;
+    if (!enabled) {
+      ui.browserStatusText.textContent = "Chrome and Edge history is not monitored. No browser domain data leaves this PC.";
+    } else if (status.lastError) {
+      ui.browserStatusText.textContent = "Browser monitoring is enabled but reporting an error.";
+    } else if (currentState && currentState.playAllowed) {
+      ui.browserStatusText.textContent = "Browser monitoring is enabled but idle while play is allowed. Policies and hosts entries are removed.";
+    } else if (Number(browser.blockedCount) > 0 && (!status.urlBlocklistApplied || !status.hostsApplied)) {
+      ui.browserStatusText.textContent = "Browser monitoring is watching, but controls are not fully active yet. The service retries automatically.";
+    } else {
+      ui.browserStatusText.textContent = "Watching Chrome and Edge history while play is blocked. Detection is retrospective; a game tab may stay open until it reloads or navigates.";
+    }
+    if (!browserFormDirty) {
+      ui.browserEnabled.checked = enabled;
+      ui.browserAutoBlock.checked = settings.autoBlock !== false;
+      ui.browserAI.checked = Boolean(settings.aiClassification);
+    }
+    ui.blockedDomainCount.textContent = String(Number(browser.blockedCount) || 0);
+    ui.reviewDomainCount.textContent = String(Number(browser.reviewCount) || 0);
+    ui.allowedDomainCount.textContent = String(Number(browser.allowedCount) || 0);
+    renderBrowserControlState(status, settings);
+  }
+
+  function renderBrowserControlState(status, settings) {
+    ui.browserControlState.replaceChildren();
+    const chips = [];
+    const browsers = status.browsers || [];
+    chips.push(browsers.length > 0 ? "Browsers: " + browsers.join(", ") : "No Chrome or Edge detected");
+    chips.push(status.urlBlocklistApplied ? "URLBlocklist active" : "URLBlocklist inactive");
+    chips.push(status.hostsApplied ? "Hosts active" : "Hosts inactive");
+    chips.push(status.dohDisabled ? "DoH disabled" : "DoH unchanged");
+    if (settings.lastScanAt && !String(settings.lastScanAt).startsWith("0001-")) {
+      chips.push("Last scan " + formatTimestamp(settings.lastScanAt));
+    }
+    if (status.driftDetected) {
+      chips.push("Drift repaired");
+    }
+    for (const text of chips) {
+      const chip = document.createElement("span");
+      chip.className = "state-chip";
+      chip.textContent = text;
+      ui.browserControlState.append(chip);
+    }
+  }
+
+  async function loadBrowserData() {
+    try {
+      const [blocked, review, allowed, detections] = await Promise.all([
+        api("/api/v1/browser/domains?status=blocked"),
+        api("/api/v1/browser/domains?status=review"),
+        api("/api/v1/browser/domains?status=allowed"),
+        api("/api/v1/browser/detections?limit=50"),
+      ]);
+      browserDomains = {
+        blocked: blocked.domains || [],
+        review: review.domains || [],
+        allowed: allowed.domains || [],
+      };
+      browserDetections = detections.detections || [];
+      renderBrowserDomains();
+      renderBrowserDetections();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      }
+    }
+  }
+
+  function renderBrowserDomains() {
+    renderBrowserDomainList(ui.blockedDomainList, ui.blockedDomainEmpty, browserDomains.blocked, "blocked");
+    renderBrowserDomainList(ui.reviewDomainList, ui.reviewDomainEmpty, browserDomains.review, "review");
+    renderBrowserDomainList(ui.allowedDomainList, ui.allowedDomainEmpty, browserDomains.allowed, "allowed");
+  }
+
+  function renderBrowserDomainList(container, emptyNode, items, listKind) {
+    container.replaceChildren();
+    emptyNode.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "list-item domain-item";
+      const copy = document.createElement("div");
+      copy.className = "domain-copy";
+      const title = document.createElement("span");
+      title.className = "item-title";
+      title.textContent = item.domain;
+      const meta = document.createElement("span");
+      meta.className = "item-meta";
+      const source = item.source || "manual";
+      const confidence = Math.round((Number(item.confidence) || 0) * 100);
+      const evidence = source === "ai" && confidence > 0 ? confidence + "% confidence - " : "";
+      meta.textContent = evidence + "last seen " + formatTimestamp(item.lastSeen) + " - seen " + (Number(item.seenCount) || 1) + (Number(item.seenCount) === 1 ? " time" : " times");
+      const badge = document.createElement("span");
+      badge.className = "item-badge " + source;
+      badge.textContent = source === "seed" ? "Seed" : source === "ai" ? "AI" : "Manual";
+      copy.append(title, meta, badge);
+      if (item.reason) {
+        const reason = document.createElement("span");
+        reason.className = "item-meta strange-reason";
+        reason.textContent = item.reason;
+        copy.append(reason);
+      }
+      const actions = document.createElement("div");
+      actions.className = "item-actions";
+      if (listKind !== "allowed") {
+        const allow = document.createElement("button");
+        allow.type = "button";
+        allow.className = "small-secondary";
+        allow.textContent = "Allow";
+        allow.addEventListener("click", () => setBrowserDomainStatus(item, "allowed", allow));
+        actions.append(allow);
+      }
+      if (listKind !== "blocked") {
+        const block = document.createElement("button");
+        block.type = "button";
+        block.className = "small-danger";
+        block.textContent = "Block";
+        block.addEventListener("click", () => setBrowserDomainStatus(item, "blocked", block));
+        actions.append(block);
+      }
+      row.append(copy, actions);
+      container.append(row);
+    }
+  }
+
+  function renderBrowserDetections() {
+    ui.browserDetectionList.replaceChildren();
+    ui.browserDetectionEmpty.hidden = browserDetections.length > 0;
+    const labels = {
+      "seed-blocked": "Blocked by seed list",
+      "ai-auto-blocked": "Auto-blocked by AI",
+      "review": "Needs review",
+      "already-blocked": "Already blocked",
+      "existing": "Already handled",
+    };
+    for (const item of browserDetections) {
+      const row = document.createElement("div");
+      row.className = "event";
+      const time = document.createElement("time");
+      time.dateTime = item.time;
+      time.textContent = formatTimestamp(item.time);
+      const message = document.createElement("span");
+      message.className = "event-message";
+      const action = labels[item.action] || item.action || "Detected";
+      message.textContent = item.domain + " - " + (item.browser || "browser") + " - " + action;
+      row.append(time, message);
+      ui.browserDetectionList.append(row);
+    }
+  }
+
+  async function saveBrowserSettings(event) {
+    event.preventDefault();
+    const enabled = ui.browserEnabled.checked;
+    const autoBlock = ui.browserAutoBlock.checked;
+    const aiClassification = ui.browserAI.checked;
+    if (aiClassification && !(currentState && currentState.ai && currentState.ai.keyConfigured)) {
+      showNotice("Add a DeepSeek API key before enabling browser AI classification.", "error");
+      return;
+    }
+    const submit = ui.browserForm.querySelector("button[type=submit]");
+    setBusy(submit, true);
+    clearNotice();
+    try {
+      const response = await api("/api/v1/browser/settings", {
+        method: "PUT",
+        body: { enabled, autoBlock, aiClassification },
+      });
+      browserFormDirty = false;
+      if (currentState) {
+        currentState.browser = response;
+      }
+      renderBrowser(response);
+      showNotice("Browser monitoring settings saved.", "success");
+      await refreshState(false);
+      await Promise.all([loadBrowserData(), loadEvents()]);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(submit, false);
+    }
+  }
+
+  async function setBrowserDomainStatus(item, status, button) {
+    const verb = status === "allowed" ? "allow" : "block";
+    if (!window.confirm("Are you sure you want to " + verb + " " + item.domain + "?")) {
+      return;
+    }
+    setBusy(button, true);
+    clearNotice();
+    try {
+      await api("/api/v1/browser/domains/" + encodeURIComponent(item.id), {
+        method: "PUT",
+        body: { status },
+      });
+      showNotice(status === "allowed" ? "Browser domain allowed." : "Browser domain blocked.", "success");
+      await refreshState(false);
+      await Promise.all([loadBrowserData(), loadEvents()]);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function addBrowserDomain(event) {
+    event.preventDefault();
+    const domain = ui.browserDomain.value.trim();
+    if (!domain) {
+      showNotice("Enter a domain to block.", "error");
+      return;
+    }
+    const submit = ui.browserDomainForm.querySelector("button[type=submit]");
+    setBusy(submit, true);
+    clearNotice();
+    try {
+      await api("/api/v1/browser/domains", { method: "POST", body: { domain } });
+      ui.browserDomainForm.reset();
+      showNotice("Browser domain blocked.", "success");
+      await refreshState(false);
+      await Promise.all([loadBrowserData(), loadEvents()]);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(submit, false);
+    }
   }
 
   function renderBuiltinGuard(state) {
@@ -556,7 +847,7 @@
       showNotice("Game added to the blocked list.", "success");
       await refreshState(false);
       syncAIForm((currentState && currentState.ai) || {});
-      await Promise.all([loadEvents(), loadStrangeActivity()]);
+      await Promise.all([loadEvents(), loadStrangeActivity(), loadBrowserData()]);
     } catch (error) {
       if (error instanceof APIError && error.status === 401) {
         showLogin("Your session expired. Enter the administrator PIN again.");
@@ -908,6 +1199,11 @@
     ui.toggleButton.addEventListener("click", togglePlay);
     ui.gameForm.addEventListener("submit", addGame);
     ui.aiForm.addEventListener("submit", saveAISettings);
+    ui.browserForm.addEventListener("submit", saveBrowserSettings);
+    for (const input of [ui.browserEnabled, ui.browserAutoBlock, ui.browserAI]) {
+      input.addEventListener("change", () => { browserFormDirty = true; });
+    }
+    ui.browserDomainForm.addEventListener("submit", addBrowserDomain);
     ui.aiTestButton.addEventListener("click", testAIConnection);
     ui.aiRemoveKeyButton.addEventListener("click", removeAIKey);
     ui.pinForm.addEventListener("submit", changePIN);
