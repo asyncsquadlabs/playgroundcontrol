@@ -27,11 +27,14 @@ var ErrProcessGone = errors.New("process is no longer running")
 
 // Process is a discovered operating-system process.
 type Process struct {
-	PID       uint32
-	Name      string
-	ImagePath string
-	CreatedAt time.Time
-	SessionID uint32
+	PID             uint32
+	Name            string
+	ImagePath       string
+	CreatedAt       time.Time
+	SessionID       uint32
+	ProductName     string `json:"-"`
+	CompanyName     string `json:"-"`
+	FileDescription string `json:"-"`
 }
 
 // Source discovers and acts on processes.

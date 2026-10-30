@@ -177,10 +177,12 @@ type stateResponse struct {
 	Version             string            `json:"version"`
 	CSRFToken           string            `json:"csrfToken"`
 	Warnings            []string          `json:"warnings"`
+	AI                  model.AISettings  `json:"ai"`
 }
 
 func (s *Server) state(session auth.Session) stateResponse {
 	cfg := s.store.Config()
+	aiSettings := s.store.AISettings()
 	status := enforce.Status{
 		RunningBlockedGames: []enforce.Match{},
 		PendingClosures:     []enforce.Pending{},
@@ -212,6 +214,12 @@ func (s *Server) state(session auth.Session) stateResponse {
 	if cfg.PlayAllowed && guardActive {
 		warnings = append(warnings, "The Roblox pre-launch guard is unexpectedly active. Roblox may remain blocked until the service is restarted.")
 	}
+	if aiSettings.Enabled && !aiSettings.KeyConfigured {
+		warnings = append(warnings, "AI monitoring is enabled but no usable DeepSeek API key is configured.")
+	}
+	if aiSettings.Enabled && aiSettings.LastError != "" {
+		warnings = append(warnings, "AI monitoring is reporting an error: "+aiSettings.LastError)
+	}
 	games := cfg.Games
 	if games == nil {
 		games = []model.Game{}
@@ -228,6 +236,7 @@ func (s *Server) state(session auth.Session) stateResponse {
 		Version:             s.version,
 		CSRFToken:           session.CSRF,
 		Warnings:            warnings,
+		AI:                  aiSettings,
 	}
 }
 
@@ -305,6 +314,9 @@ func (s *Server) handlePlayState(w http.ResponseWriter, r *http.Request) {
 	if s.enforcer != nil {
 		s.enforcer.Wake()
 	}
+	if s.ai != nil {
+		s.ai.Wake()
+	}
 	writeJSON(w, http.StatusOK, s.state(session))
 }
 
@@ -379,13 +391,19 @@ func (s *Server) handleDeleteGame(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "game_not_found", "That game is not configured.")
 		return
 	}
+	message := "Game removed: " + found.Name
+	result := "removed"
+	if found.Source == model.GameSourceAI {
+		message = "AI-added game removed; AI will ignore it: " + found.Name
+		result = "removed-and-ignored"
+	}
 	s.audit(model.AuditEvent{
 		Type:     model.EventGame,
-		Message:  "Game removed: " + found.Name,
+		Message:  message,
 		ActorIP:  clientIPString(r),
 		GameID:   found.ID,
 		GameName: found.Name,
-		Result:   "removed",
+		Result:   result,
 	})
 	if s.enforcer != nil {
 		s.enforcer.Wake()

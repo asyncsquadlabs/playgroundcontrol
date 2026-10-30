@@ -26,8 +26,30 @@ func TestNormalizeGame(t *testing.T) {
 	if game.ID == "" || len(game.ID) != 32 {
 		t.Fatalf("unexpected ID %q", game.ID)
 	}
+	if game.Source != GameSourceParent {
+		t.Fatalf("source = %q, want parent", game.Source)
+	}
 	if game.AddedAt.IsZero() {
 		t.Fatal("AddedAt was not set")
+	}
+
+	aiGame, err := NormalizeGame(Game{
+		Name:       "AI Game",
+		Executable: "ai.exe",
+		Source:     GameSourceAI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aiGame.Source != GameSourceAI {
+		t.Fatalf("AI source = %q", aiGame.Source)
+	}
+}
+
+func TestDefaultAISettingsEnableAutoBlock(t *testing.T) {
+	settings := DefaultAISettings()
+	if settings.Enabled || !settings.AutoBlock || settings.Model != DefaultAIModel {
+		t.Fatalf("unexpected AI defaults: %+v", settings)
 	}
 }
 
@@ -47,6 +69,7 @@ func TestNormalizeGameRejectsUnsafeInput(t *testing.T) {
 		{"control character", Game{Name: "Game\x00", Executable: "game.exe"}},
 		{"invalid filename character", Game{Name: "Game", Executable: "game?.exe"}},
 		{"invalid path character", Game{Name: "Game", Executable: "game.exe", ImagePath: `C:\Games\g*me.exe`}},
+		{"invalid source", Game{Name: "Game", Executable: "game.exe", Source: "remote"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

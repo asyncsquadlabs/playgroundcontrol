@@ -49,6 +49,13 @@ type LaunchGuard interface {
 	Active() (bool, error)
 }
 
+// AIMonitor tests the saved DeepSeek configuration and accepts wake requests
+// when settings change.
+type AIMonitor interface {
+	Test(context.Context) (time.Duration, error)
+	Wake()
+}
+
 // Options configures a Server.
 type Options struct {
 	Address      string
@@ -56,6 +63,7 @@ type Options struct {
 	AllowedHosts []string
 	Now          func() time.Time
 	LaunchGuard  LaunchGuard
+	AI           AIMonitor
 }
 
 // Server holds process-wide dependencies. It is safe to construct once and
@@ -65,6 +73,7 @@ type Server struct {
 	auth        *auth.Manager
 	enforcer    Enforcer
 	launchGuard LaunchGuard
+	ai          AIMonitor
 	version     string
 	address     string
 	now         func() time.Time
@@ -94,6 +103,7 @@ func New(options Options, st *store.Store, authManager *auth.Manager, enforcer E
 		auth:         authManager,
 		enforcer:     enforcer,
 		launchGuard:  options.LaunchGuard,
+		ai:           options.AI,
 		version:      options.Version,
 		address:      options.Address,
 		now:          options.Now,
@@ -132,6 +142,11 @@ func (s *Server) buildHandler() http.Handler {
 	mux.Handle("POST /api/v1/games", s.withMutation(s.handleAddGame))
 	mux.Handle("DELETE /api/v1/games/{id}", s.withMutation(s.handleDeleteGame))
 	mux.Handle("GET /api/v1/events", s.withAuth(s.handleEvents))
+	mux.Handle("PUT /api/v1/ai-settings", s.withMutation(s.handleAISettings))
+	mux.Handle("POST /api/v1/ai-settings/test", s.withMutation(s.handleTestAI))
+	mux.Handle("GET /api/v1/strange-activity", s.withAuth(s.handleStrangeActivity))
+	mux.Handle("POST /api/v1/strange-activity/{id}/block", s.withMutation(s.handleBlockStrangeActivity))
+	mux.Handle("DELETE /api/v1/strange-activity/{id}", s.withMutation(s.handleIgnoreStrangeActivity))
 	mux.Handle("PUT /api/v1/pin", s.withMutation(s.handleChangePIN))
 
 	return s.securityHeaders(s.networkGuard(mux))

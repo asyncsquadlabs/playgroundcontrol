@@ -1262,8 +1262,8 @@
           <a class="button ghost" href="dist/PlaygroundControl.exe" download>Get the EXE</a>
         </div>
         <div class="hero-meta">
-          <span>24 test items</span>
-          <span>About 50-65 minutes</span>
+          <span>28 test items</span>
+          <span>About 70-95 minutes</span>
           <span>Destructive uninstall test at the end</span>
         </div>
       </div>
@@ -1296,6 +1296,7 @@
       <a href="#install">Install</a>
       <a href="#first-run">First run</a>
       <a href="#enforcement">Enforcement</a>
+      <a href="#ai-monitoring">AI monitoring</a>
       <a href="#lan-security">LAN/security</a>
       <a href="#uninstall">Uninstall</a>
       <a href="#troubleshooting">Troubleshoot</a>
@@ -1331,6 +1332,7 @@
       <a href="#install"><span class="step-dot">1</span>Installation</a>
       <a href="#first-run"><span class="step-dot">2</span>First run and PIN</a>
       <a href="#enforcement"><span class="step-dot">3</span>Play enforcement</a>
+      <a href="#ai-monitoring"><span class="step-dot">3A</span>AI monitoring</a>
       <a href="#lan-security"><span class="step-dot">4</span>LAN and security</a>
       <a href="#uninstall"><span class="step-dot">5</span>Uninstall</a>
       <a href="#troubleshooting"><span class="step-dot">?</span>Troubleshooting</a>
@@ -1809,6 +1811,81 @@ Start-Sleep -Seconds 2
 # Sign in with the original PIN. Play is allowed and the game list is unchanged.</code></pre><button class="copy-code" type="button" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
               </details>
               <div class="expected"><strong>Expected</strong>The service returns after reboot and the saved permission/game list are intact. The dashboard never presents first-run setup again on a healthy database. Sessions do not survive service restart, so sign in with the existing PIN again. Play state is persistent by design and does not auto-expire.</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="ai-monitoring">
+      <div class="section-heading">
+        <div>
+          <p class="section-eyebrow">Phase 3A</p>
+          <h2>DeepSeek AI monitoring</h2>
+          <p>These checks prove the optional AI path is opt-in, keeps the key write-only, auto-blocks only high-confidence games through the normal enforcement path, and makes false-positive recovery possible.</p>
+        </div>
+        <span class="section-count">4 tests</span>
+      </div>
+
+      <div class="phase">
+        <div class="phase-head">
+          <span class="phase-number">03A</span>
+          <div><h3>Verify AI configuration, auto-block, and ignore handling</h3><p>Use a DeepSeek API key and two installed games that are not in the blocked list. Disable AI monitoring again when the checks are complete.</p></div>
+        </div>
+        <div class="test-list">
+          <article class="test-card" data-test="ai-key" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="ai-key">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark AI key configuration test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">AI.1</span><span class="level essential">Essential</span><span class="time">4 min</span></div>
+              <h3 class="test-title">Configure the key, test DeepSeek, and verify the key is never returned</h3>
+              <p class="test-body">In <strong>AI monitoring</strong>, enter the DeepSeek key, leave the model at <code>deepseek-flash</code>, confirm <strong>Automatically block high-confidence games</strong> is checked, enable monitoring, and save. Press <strong>Test connection</strong>, then reload the dashboard and sign in again.</p>
+              <div class="expected"><strong>Expected</strong>The status becomes <strong>On</strong>, the test reports a latency, and the key field is blank with only a last-four hint. The auto-block setting remains checked. The full key never appears in the page, dashboard state, audit history, or service log. Disabling AI removes the hint only after you explicitly use Remove key.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="ai-autoblock" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="ai-autoblock">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark AI auto-block test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">AI.2</span><span class="level essential">Essential</span><span class="time">12 min</span></div>
+              <h3 class="test-title">Auto-block a high-confidence game, then remove it and verify AI ignores it</h3>
+              <p class="test-body">With AI monitoring enabled, auto-block checked, and play blocked, launch an installed game that is <strong>not</strong> in the blocked list and is not Roblox. Wait up to 30 seconds. Confirm the game appears in <strong>Additional games</strong> with an <strong>AI</strong> badge and receives the normal close request and 10-second grace. Remove that AI-added game, relaunch it, and wait at least 30 seconds.</p>
+              <div class="expected"><strong>Expected</strong>A new blocked game with source AI appears, the running process follows the normal close/force-close path, and the audit history records an AI auto-block event. No Strange activity row is required for that high-confidence game. After removal, AI does not re-add or close that executable/path, and the dashboard confirms it will ignore it. Manually adding the same game later clears the ignore entry.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="ai-advisory" data-level="essential">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="ai-advisory">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark AI advisory-mode test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">AI.3</span><span class="level essential">Essential</span><span class="time">8 min</span></div>
+              <h3 class="test-title">Disable auto-block and verify findings remain advisory</h3>
+              <p class="test-body">Uncheck <strong>Automatically block high-confidence games</strong>, save, and confirm the AI status says auto-block is off. With play blocked, launch a second unlisted game and wait up to 30 seconds. Then use <strong>Add to blocked games</strong> on the finding.</p>
+              <div class="expected"><strong>Expected</strong>A Strange activity row appears with the AI-suggested name, executable/path, confidence, reason, and timestamps. The game is not added automatically and is not closed merely because AI identified it. After Add to blocked games, the game is added to the blocked list, the finding is removed, and the running process follows the normal close/force-close path.</div>
+            </div>
+          </article>
+
+          <article class="test-card" data-test="ai-boundaries" data-level="advanced">
+            <label class="test-check">
+              <input class="test-checkbox" type="checkbox" data-test="ai-boundaries">
+              <span class="checkbox-ui"></span>
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Mark AI boundary test complete</span>
+            </label>
+            <div>
+              <div class="test-topline"><span class="test-id">AI.4</span><span class="level advanced">Advanced</span><span class="time">6 min</span></div>
+              <h3 class="test-title">Confirm AI is idle while play is allowed and errors stay visible</h3>
+              <p class="test-body">Allow play and launch an unlisted game; wait at least 30 seconds. Then re-enable AI, temporarily block outbound HTTPS, and return to blocked play. Mark a finding <strong>Not a game</strong>.</p>
+              <div class="expected"><strong>Expected</strong>No new Strange activity or auto-block appears while play is allowed. An unreachable DeepSeek endpoint produces a visible AI error and warning without crashing the service or affecting Roblox/game enforcement. Not a game removes the finding, writes an ignore entry, and records an audit event; the ignored executable/path is not sent to DeepSeek again. No network request contains window titles, command lines, usernames, or full unredacted user-profile paths.</div>
             </div>
           </article>
         </div>

@@ -36,6 +36,21 @@
     gamePath: document.getElementById("gamePath"),
     enforcementList: document.getElementById("enforcementList"),
     enforcementEmpty: document.getElementById("enforcementEmpty"),
+    aiStatusBadge: document.getElementById("aiStatusBadge"),
+    aiStatusText: document.getElementById("aiStatusText"),
+    aiForm: document.getElementById("aiForm"),
+    aiEnabled: document.getElementById("aiEnabled"),
+    aiAutoBlock: document.getElementById("aiAutoBlock"),
+    aiModel: document.getElementById("aiModel"),
+    aiKey: document.getElementById("aiKey"),
+    aiKeyState: document.getElementById("aiKeyState"),
+    aiTestButton: document.getElementById("aiTestButton"),
+    aiRemoveKeyButton: document.getElementById("aiRemoveKeyButton"),
+    aiLastVerified: document.getElementById("aiLastVerified"),
+    aiError: document.getElementById("aiError"),
+    strangeActivityList: document.getElementById("strangeActivityList"),
+    strangeActivityEmpty: document.getElementById("strangeActivityEmpty"),
+    strangeCount: document.getElementById("strangeCount"),
     eventsList: document.getElementById("eventsList"),
     eventsEmpty: document.getElementById("eventsEmpty"),
     lanUrls: document.getElementById("lanUrls"),
@@ -51,8 +66,10 @@
   let bootstrap = null;
   let dashboardPoll = null;
   let eventPoll = null;
+  let strangePoll = null;
   let refreshing = false;
   let setupTokenFromURL = "";
+  let strangeActivity = [];
 
   class APIError extends Error {
     constructor(message, status, code) {
@@ -153,6 +170,13 @@
         }
       }, 5000);
     }
+    if (!strangePoll) {
+      strangePoll = window.setInterval(() => {
+        if (!document.hidden && !views.dashboard.hidden) {
+          loadStrangeActivity();
+        }
+      }, 5000);
+    }
   }
 
   function stopDashboard() {
@@ -164,7 +188,12 @@
       window.clearInterval(eventPoll);
       eventPoll = null;
     }
+    if (strangePoll) {
+      window.clearInterval(strangePoll);
+      strangePoll = null;
+    }
     currentState = null;
+    strangeActivity = [];
   }
 
   async function init() {
@@ -213,8 +242,9 @@
     currentState = state;
     setView("dashboard");
     renderState(state);
+    syncAIForm(state.ai || {});
     startPolling();
-    await loadEvents();
+    await Promise.all([loadEvents(), loadStrangeActivity()]);
   }
 
   function showLogin(message) {
@@ -277,6 +307,12 @@
       meta.className = "item-meta";
       meta.textContent = game.imagePath ? game.imagePath : game.executable + " (any folder)";
       copy.append(title, meta);
+      if (game.source === "ai") {
+        const badge = document.createElement("span");
+        badge.className = "item-badge ai";
+        badge.textContent = "AI";
+        copy.append(badge);
+      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "small-danger";
@@ -288,7 +324,55 @@
 
     renderWarnings(state);
     renderEnforcement(state);
+    renderAIStatus(state.ai || {});
     renderLANURLs(state.lanUrls);
+  }
+
+  function renderAIStatus(ai) {
+    const configured = Boolean(ai.keyConfigured);
+    const enabled = Boolean(ai.enabled);
+    let badge = "Off";
+    let badgeClass = "off";
+    if (enabled && configured && !ai.lastError) {
+      badge = "On";
+      badgeClass = "on";
+    } else if (enabled && configured) {
+      badge = "Error";
+      badgeClass = "error";
+    } else if (enabled) {
+      badge = "Key missing";
+      badgeClass = "error";
+    }
+    ui.aiStatusBadge.textContent = badge;
+    ui.aiStatusBadge.className = "ai-badge " + badgeClass;
+    if (!enabled) {
+      ui.aiStatusText.textContent = "DeepSeek monitoring is off. No process data leaves this PC.";
+    } else if (!configured) {
+      ui.aiStatusText.textContent = "AI monitoring is enabled but no usable DeepSeek API key is configured.";
+    } else if (ai.lastError) {
+      ui.aiStatusText.textContent = "AI monitoring is enabled. DeepSeek is reporting an error.";
+    } else if (ai.autoBlock) {
+      ui.aiStatusText.textContent = "AI monitoring is watching while play is blocked. Games at 90% confidence or higher are auto-blocked and closed; lower-confidence findings need review.";
+    } else {
+      ui.aiStatusText.textContent = "AI monitoring is watching while play is blocked. Auto-block is off; findings need review.";
+    }
+    ui.aiKeyState.textContent = configured ? "API key configured, ending in " + (ai.keyHint || "****") + "." : "No API key configured.";
+    ui.aiTestButton.disabled = !configured;
+    ui.aiRemoveKeyButton.hidden = !configured;
+    ui.aiLastVerified.textContent = ai.lastVerifiedAt && !String(ai.lastVerifiedAt).startsWith("0001-")
+      ? "Last successful DeepSeek check: " + formatTimestamp(ai.lastVerifiedAt)
+      : "";
+    const showError = enabled && Boolean(ai.lastError);
+    ui.aiError.hidden = !showError;
+    ui.aiError.textContent = showError ? ai.lastError : "";
+  }
+
+  function syncAIForm(ai) {
+    ui.aiEnabled.checked = Boolean(ai.enabled);
+    ui.aiAutoBlock.checked = ai.autoBlock !== false;
+    ui.aiModel.value = ai.model || "deepseek-flash";
+    ui.aiKey.value = "";
+    ui.aiKey.placeholder = ai.keyConfigured ? "Leave blank to keep the configured key" : "Enter a DeepSeek API key";
   }
 
   function renderBuiltinGuard(state) {
@@ -392,6 +476,229 @@
     }
   }
 
+  async function loadStrangeActivity() {
+    try {
+      const response = await api("/api/v1/strange-activity?limit=50");
+      strangeActivity = response.activity || [];
+      renderStrangeActivity();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      }
+    }
+  }
+
+  function renderStrangeActivity() {
+    ui.strangeActivityList.replaceChildren();
+    const ai = (currentState && currentState.ai) || {};
+    ui.strangeCount.textContent = strangeActivity.length === 0
+      ? "No findings"
+      : String(strangeActivity.length) + (strangeActivity.length === 1 ? " finding" : " findings");
+    ui.strangeActivityEmpty.hidden = strangeActivity.length > 0;
+    if (!ai.enabled) {
+      ui.strangeActivityEmpty.textContent = "AI monitoring is off. Enable it to detect unlisted games while play is blocked.";
+    } else if (!ai.keyConfigured) {
+      ui.strangeActivityEmpty.textContent = "AI monitoring is enabled but has no usable DeepSeek API key.";
+    } else if (ai.autoBlock) {
+      ui.strangeActivityEmpty.textContent = "No lower-confidence findings need review. High-confidence games are added directly to the blocked list.";
+    } else {
+      ui.strangeActivityEmpty.textContent = "No unexpected games detected yet.";
+    }
+
+    for (const item of strangeActivity) {
+      const row = document.createElement("div");
+      row.className = "list-item strange-item";
+      const copy = document.createElement("div");
+      copy.className = "strange-copy";
+      const title = document.createElement("span");
+      title.className = "item-title";
+      title.textContent = item.name || item.executable;
+      const identity = document.createElement("span");
+      identity.className = "item-meta";
+      identity.textContent = item.executable + (item.imagePath ? " - " + item.imagePath : " - path unavailable");
+      const evidence = document.createElement("span");
+      evidence.className = "item-meta";
+      const confidence = Math.round((Number(item.confidence) || 0) * 100);
+      const seen = Number(item.seenCount) || 1;
+      evidence.textContent = confidence + "% confidence - first seen " + formatTimestamp(item.firstSeen) + " - last seen " + formatTimestamp(item.lastSeen) + " - seen " + seen + (seen === 1 ? " time" : " times");
+      const reason = document.createElement("span");
+      reason.className = "item-meta strange-reason";
+      reason.textContent = item.reason || "";
+      copy.append(title, identity, evidence, reason);
+
+      const actions = document.createElement("div");
+      actions.className = "item-actions";
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "small-secondary";
+      add.textContent = "Add to blocked games";
+      add.addEventListener("click", () => blockStrangeActivity(item, add));
+      const ignore = document.createElement("button");
+      ignore.type = "button";
+      ignore.className = "small-danger";
+      ignore.textContent = "Not a game";
+      ignore.addEventListener("click", () => ignoreStrangeActivity(item, ignore));
+      actions.append(add, ignore);
+      row.append(copy, actions);
+      ui.strangeActivityList.append(row);
+    }
+  }
+
+  async function blockStrangeActivity(item, button) {
+    const confirmed = window.confirm("Add " + item.name + " to the blocked game list? If play is blocked, its running process will be asked to close and may be force-closed after 10 seconds.");
+    if (!confirmed) {
+      return;
+    }
+    setBusy(button, true);
+    clearNotice();
+    try {
+      await api("/api/v1/strange-activity/" + encodeURIComponent(item.id) + "/block", { method: "POST" });
+      showNotice("Game added to the blocked list.", "success");
+      await refreshState(false);
+      syncAIForm((currentState && currentState.ai) || {});
+      await Promise.all([loadEvents(), loadStrangeActivity()]);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function ignoreStrangeActivity(item, button) {
+    const confirmed = window.confirm("Mark " + (item.name || item.executable) + " as not a game? AI will ignore " + item.executable + " and this path in the future.");
+    if (!confirmed) {
+      return;
+    }
+    setBusy(button, true);
+    clearNotice();
+    try {
+      await api("/api/v1/strange-activity/" + encodeURIComponent(item.id), { method: "DELETE" });
+      showNotice("AI will ignore that executable and path.", "success");
+      await loadStrangeActivity();
+      await loadEvents();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function saveAISettings(event) {
+    event.preventDefault();
+    const enabled = ui.aiEnabled.checked;
+    const autoBlock = ui.aiAutoBlock.checked;
+    const model = ui.aiModel.value.trim() || "deepseek-flash";
+    const apiKey = ui.aiKey.value.trim();
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(model)) {
+      showNotice("The DeepSeek model name contains invalid characters.", "error");
+      return;
+    }
+    if (apiKey && !/^\S{8,512}$/.test(apiKey)) {
+      showNotice("The DeepSeek API key must be 8 to 512 non-whitespace characters.", "error");
+      return;
+    }
+    if (enabled && !apiKey && !(currentState && currentState.ai && currentState.ai.keyConfigured)) {
+      showNotice("Add a DeepSeek API key before enabling AI monitoring.", "error");
+      return;
+    }
+    const submit = ui.aiForm.querySelector("button[type=submit]");
+    setBusy(submit, true);
+    clearNotice();
+    try {
+      const response = await api("/api/v1/ai-settings", {
+        method: "PUT",
+        body: { enabled, autoBlock, model, apiKey, clearApiKey: false },
+      });
+      ui.aiKey.value = "";
+      if (response.ai) {
+        syncAIForm(response.ai);
+        renderAIStatus(response.ai);
+        if (currentState) {
+          currentState.ai = response.ai;
+        }
+      }
+      showNotice("AI settings saved.", "success");
+      await refreshState(false);
+      syncAIForm((currentState && currentState.ai) || response.ai || {});
+      await loadEvents();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(submit, false);
+    }
+  }
+
+  async function testAIConnection() {
+    if (!(currentState && currentState.ai && currentState.ai.keyConfigured)) {
+      showNotice("Save a DeepSeek API key before testing the connection.", "error");
+      return;
+    }
+    setBusy(ui.aiTestButton, true);
+    clearNotice();
+    try {
+      const response = await api("/api/v1/ai-settings/test", { method: "POST" });
+      showNotice("DeepSeek connection succeeded in " + response.latencyMs + " ms.", "success");
+      await refreshState(false);
+      syncAIForm((currentState && currentState.ai) || {});
+      await loadEvents();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(ui.aiTestButton, false);
+    }
+  }
+
+  async function removeAIKey() {
+    if (!window.confirm("Remove the DeepSeek API key and disable AI monitoring?")) {
+      return;
+    }
+    const model = (currentState && currentState.ai && currentState.ai.model) || "deepseek-flash";
+    const autoBlock = !(currentState && currentState.ai && currentState.ai.autoBlock === false);
+    setBusy(ui.aiRemoveKeyButton, true);
+    clearNotice();
+    try {
+      const response = await api("/api/v1/ai-settings", {
+        method: "PUT",
+        body: { enabled: false, autoBlock, model, apiKey: "", clearApiKey: true },
+      });
+      if (response.ai) {
+        syncAIForm(response.ai);
+        renderAIStatus(response.ai);
+        if (currentState) {
+          currentState.ai = response.ai;
+        }
+      }
+      showNotice("DeepSeek API key removed. AI monitoring is off.", "success");
+      await refreshState(false);
+      syncAIForm((currentState && currentState.ai) || response.ai || {});
+      await loadEvents();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(ui.aiRemoveKeyButton, false);
+    }
+  }
+
   function formatTimestamp(value) {
     if (!value || value.startsWith("0001-")) {
       return "Not yet";
@@ -463,13 +770,16 @@
   }
 
   async function removeGame(game) {
-    if (!window.confirm("Remove " + game.name + " from the blocked game list?")) {
+    const prompt = game.source === "ai"
+      ? "Remove " + game.name + " from the blocked game list? AI will ignore " + game.executable + " and this path and will not add it again."
+      : "Remove " + game.name + " from the blocked game list?";
+    if (!window.confirm(prompt)) {
       return;
     }
     clearNotice();
     try {
       await api("/api/v1/games/" + encodeURIComponent(game.id), { method: "DELETE" });
-      showNotice("Game removed.", "success");
+      showNotice(game.source === "ai" ? "AI game removed; AI will ignore it." : "Game removed.", "success");
       await refreshState(false);
       await loadEvents();
     } catch (error) {
@@ -597,6 +907,9 @@
     ui.loginForm.addEventListener("submit", login);
     ui.toggleButton.addEventListener("click", togglePlay);
     ui.gameForm.addEventListener("submit", addGame);
+    ui.aiForm.addEventListener("submit", saveAISettings);
+    ui.aiTestButton.addEventListener("click", testAIConnection);
+    ui.aiRemoveKeyButton.addEventListener("click", removeAIKey);
     ui.pinForm.addEventListener("submit", changePIN);
     ui.logoutButton.addEventListener("click", logout);
   }

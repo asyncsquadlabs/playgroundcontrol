@@ -67,6 +67,46 @@ var schemaStatements = []string{
 	)`,
 }
 
+var schemaV2Statements = []string{
+	`CREATE TABLE IF NOT EXISTS ai_settings (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+		auto_block INTEGER NOT NULL DEFAULT 1,
+		model TEXT NOT NULL DEFAULT 'deepseek-flash',
+		api_key_enc BLOB NOT NULL DEFAULT X'',
+		key_hint TEXT NOT NULL DEFAULT '',
+		last_verified_at TEXT,
+		last_error TEXT NOT NULL DEFAULT '',
+		last_error_at TEXT
+	)`,
+	`CREATE TABLE IF NOT EXISTS strange_activity (
+		id TEXT PRIMARY KEY,
+		activity_key TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL,
+		executable TEXT NOT NULL,
+		image_path TEXT NOT NULL DEFAULT '',
+		product_name TEXT NOT NULL DEFAULT '',
+		company_name TEXT NOT NULL DEFAULT '',
+		file_description TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT '',
+		first_seen TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		seen_count INTEGER NOT NULL DEFAULT 1,
+		last_pid INTEGER NOT NULL DEFAULT 0,
+		model TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_strange_activity_last_seen
+		ON strange_activity(last_seen DESC, id DESC)`,
+	`CREATE TABLE IF NOT EXISTS ai_ignored (
+		activity_key TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		executable TEXT NOT NULL,
+		image_path TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	)`,
+}
+
 func databasePath(dir string) string {
 	return filepath.Join(dir, databaseFileName)
 }
@@ -177,38 +217,81 @@ func migrate(db *sql.DB) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	switch version {
-	case 0:
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin schema migration: %w", err)
-		}
-		for _, statement := range schemaStatements {
-			if _, err := tx.Exec(statement); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("create schema: %w", err)
-			}
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO app_state (id, play_allowed, last_changed_at, last_changed_by) VALUES (1, 0, NULL, '')`); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("initialize app state: %w", err)
-		}
-		if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("set schema version: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit schema migration: %w", err)
-		}
-		return nil
-	case 1:
-		if _, err := db.Exec(`INSERT OR IGNORE INTO app_state (id, play_allowed, last_changed_at, last_changed_by) VALUES (1, 0, NULL, '')`); err != nil {
-			return fmt.Errorf("initialize app state: %w", err)
-		}
-		return nil
-	default:
-		return fmt.Errorf("database schema version %d is newer than the supported version 1", version)
+	if version > 2 {
+		return fmt.Errorf("database schema version %d is newer than the supported version 2", version)
 	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	statements := append([]string(nil), schemaStatements...)
+	statements = append(statements, schemaV2Statements...)
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+	}
+	if err := ensureColumn(tx, "games", "source",
+		`ALTER TABLE games ADD COLUMN source TEXT NOT NULL DEFAULT 'parent'`); err != nil {
+		return err
+	}
+	if err := ensureColumn(tx, "ai_settings", "auto_block",
+		`ALTER TABLE ai_settings ADD COLUMN auto_block INTEGER NOT NULL DEFAULT 1`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO app_state (id, play_allowed, last_changed_at, last_changed_by) VALUES (1, 0, NULL, '')`); err != nil {
+		return fmt.Errorf("initialize app state: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_settings (id, enabled, auto_block, model, api_key_enc, key_hint, last_verified_at, last_error, last_error_at) VALUES (1, 0, 1, ?, X'', '', NULL, '', NULL)`, "deepseek-flash"); err != nil {
+		return fmt.Errorf("initialize AI settings: %w", err)
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func ensureColumn(tx *sql.Tx, table, column, alter string) error {
+	// #nosec G201 -- table is a compile-time constant supplied by this file.
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("inspect %s schema: %w", table, err)
+		}
+		if strings.EqualFold(name, column) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	if _, err := tx.Exec(alter); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 func (s *Store) openPrimaryWithRetry() (*sql.DB, error) {

@@ -34,6 +34,9 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 - Detection of renamed Roblox processes running from known Roblox install paths.
 - Graceful close request, followed by a 10-second grace period and force-close fallback for custom games.
 - PID plus process-creation-time identity checks to avoid terminating reused PIDs.
+- Optional DeepSeek AI monitoring while play is blocked. At 90% confidence or higher, an unlisted game is added to the blocked list with an **AI** badge and closed through the normal grace period. Lower-confidence findings appear as **Strange activity** for parent review.
+- Removing an AI-added game, or marking a finding **Not a game**, makes AI ignore that executable and path permanently; manually adding the game later clears the ignore entry.
+- DeepSeek API keys are entered on the authenticated dashboard and sealed with machine-scoped Windows DPAPI in SQLite.
 - Windows Firewall rule limited to inbound TCP 8080 on the private profile and local subnet.
 - Protected SQLite ProgramData storage, last-known-good database backup, login throttling, CSRF protection, security headers, and fail-closed configuration handling.
 - Live native setup window with a step-by-step transcript, service-start checkpoints, and copyable diagnostics.
@@ -49,7 +52,7 @@ Playground Control is a self-installing Windows service and private-LAN dashboar
 4. Run `PlaygroundControl.exe` and approve the UAC prompt. If Windows SmartScreen appears, verify the hash before choosing **More info → Run anyway**. The setup window shows each installation step; when an older version is detected, choose **Repair / keep data** to upgrade in place.
 5. Complete the first-run setup on the gaming PC and choose an 8 to 12 digit PIN.
 6. Open the dashboard from a phone on the same private LAN using the URL shown by setup.
-7. Read [TESTING.html](TESTING.html) for the 24-item acceptance test.
+7. Read [TESTING.html](TESTING.html) for the 28-item acceptance test.
 
 If an earlier build is already installed, run the 1.2.2 installer and choose **Repair / keep data** to upgrade in place. The installer uses a live setup window, preserves `C:\ProgramData\PlaygroundControl`, and reports the exact Windows service error if startup fails. Choose **Full reset** only when you intentionally want to delete the PIN, games, play state, and history. A preserved 1.0.x ProgramData directory is still imported into SQLite once and the old files are archived as `*.migrated`.
 
@@ -64,9 +67,14 @@ Playground Control service (LocalSystem)
           │
           ├── SQLite state + bounded audit history in C:\ProgramData\PlaygroundControl\playground.db
           ├── IFEO launch guard for Roblox while play is off, redirecting blocked launches to a Chrome study search
-          └── Process enforcement every 500 ms
-                 ├── close request in the player's session
-                 └── force-close after 10 seconds
+          ├── Process enforcement every 500 ms
+          │      ├── close request in the player's session
+          │      └── force-close after 10 seconds
+          └── Optional DeepSeek classification while play is off
+                 ├── minimal process metadata over HTTPS (no window titles or command lines)
+                 ├── >=90% confidence: game added to the blocked list and closed
+                 ├── lower confidence: Strange activity finding for review
+                 └── ignored executables/paths are never sent to DeepSeek
 ```
 
 The service runs in session 0. For graceful closes, it acquires the interactive user's token, launches a narrow close helper in that user's session, and posts `WM_CLOSE` to visible top-level windows. Force-kill remains available to the service after the grace period.
@@ -86,6 +94,16 @@ The service runs in session 0. For graceful closes, it acquires the interactive 
 | Login throttle | 5 failures / 15 minutes per source IP |
 | Persistence | SQLite WAL, full synchronous commits, latest-3 corrupt archives |
 | Audit retention | 50,000 newest events |
+| AI monitoring | Off; optional DeepSeek API key |
+| DeepSeek endpoint/model | `https://api.deepseek.com/chat/completions`, `deepseek-flash` |
+| AI scan interval | 15 seconds while play is blocked |
+| AI request limits | 20 processes/batch, 30 seconds between calls, 60 calls/hour |
+| AI verdict cache | 24 hours; positive and negative |
+| AI confidence floor | 0.70 |
+| AI auto-block threshold | 0.90; toggle on by default when AI is enabled |
+| AI auto-block action | Add to blocked games, then normal graceful close and 10-second grace |
+| AI ignore retention | 5,000 newest executable/path entries |
+| Strange activity retention | 5,000 newest findings |
 
 ## Build from source
 
@@ -131,11 +149,14 @@ The build is deterministic apart from Go's normal build metadata. The generated 
 
 ```text
 cmd/playgroundcontrol/       Windows entry point and generated resources
+internal/aiwatch/            DeepSeek monitoring, auto-block, and strange-activity recording
 internal/auth/               PIN hashing, setup tokens, sessions, throttling
+internal/deepseek/           Fixed-endpoint DeepSeek classification client
 internal/enforce/            Process-detection and close/kill state machine
-internal/model/              Configuration, validation, and audit types
-internal/platform/           Windows process APIs, IFEO guard, close helper
+internal/model/              Configuration, validation, audit, and strange-activity types
+internal/platform/           Windows process APIs, metadata, IFEO guard, close helper
 internal/protection/         Mandatory Roblox image and path policy
+internal/secret/             Machine-scoped DPAPI secret codec
 internal/server/             HTTP API, security middleware, embedded dashboard
 internal/store/              SQLite persistence, recovery, migration, bounded audit log
 internal/windowsapp/         Installer, SCM, firewall, ACL, and recovery modes
@@ -148,15 +169,17 @@ SECURITY.md                  Threat model, accepted risks, reporting process
 
 The service owns these files under `C:\ProgramData\PlaygroundControl`:
 
-- `playground.db` — SQLite state: Argon2id PIN record, play permission, custom game list, and bounded audit history
-- `playground.db.bak` — last-known-good SQLite snapshot, refreshed after PIN/config/game changes and on clean shutdown
+- `playground.db` — SQLite state: Argon2id PIN record, play permission, custom game list with AI provenance, DPAPI-sealed DeepSeek key, AI settings, AI ignore entries, strange-activity findings, and bounded audit history
+- `playground.db.bak` — last-known-good SQLite snapshot, refreshed after PIN/config/game/AI changes and on clean shutdown
 - `playground.db-wal` / `playground.db-shm` — SQLite write-ahead log and shared-memory files while the service runs
 - `setup.token` — short-lived one-time setup token when unclaimed
 - `service.log` — service diagnostic log, including startup checkpoints
 - `install.log` — installer transcript (rotated at 2 MiB)
 - `*.migrated` — archived JSON/JSONL files after the one-time upgrade import
 
-The database uses WAL mode and full synchronous commits. A corrupt or unreadable primary database is archived with a timestamp suffix, the last-known-good backup is restored when valid, and a fresh setup is offered only when no usable backup exists. The latest three corrupt archives are retained. The directory is ACL-restricted to SYSTEM and Administrators. It is deleted on uninstall after confirmation, along with the service, firewall rule, PIN, game list, and audit history.
+The database uses WAL mode and full synchronous commits. A corrupt or unreadable primary database is archived with a timestamp suffix, the last-known-good backup is restored when valid, and a fresh setup is offered only when no usable backup exists. The latest three corrupt archives are retained. The directory is ACL-restricted to SYSTEM and Administrators. It is deleted on uninstall after confirmation, along with the service, firewall rule, PIN, game list, AI settings, AI ignore entries, strange-activity findings, and audit history.
+
+The DeepSeek API key is encrypted with machine-scoped DPAPI before it is stored. The key is never returned by the dashboard API and cannot be decrypted after the database is moved to another PC; re-enter it in that case. AI monitoring is off by default. When enabled, high-confidence auto-block uses the same game-list and enforcement path as a parent-added game; lower-confidence findings remain advisory.
 
 Browser sessions remain in memory and do not survive a service or Windows restart. After a reboot, open the dashboard and sign in with the existing PIN; do not create a new one. An unreadable authentication record is a startup error rather than an automatic reset, so `--reset-admin` remains the explicit recovery path.
 
@@ -178,10 +201,13 @@ PlaygroundControl.exe --version
 Security design, accepted risks, and the reporting process are documented in [SECURITY.md](SECURITY.md). In particular:
 
 - The dashboard is plain HTTP and must only be used on a trusted private LAN.
+- Any signed-in administrator can set or change the DeepSeek API key; the key crosses the LAN in cleartext when entered remotely. Use a trusted network and rotate the key if it may have been observed.
+- When AI monitoring is enabled, minimal process metadata is sent over HTTPS to DeepSeek while play is blocked. No window titles, command lines, usernames, or document names are sent.
 - The player must not have Windows administrator access.
 - The EXE is unsigned unless you sign it; IFEO changes may trigger antivirus heuristics.
 - Roblox enforcement is deterrence and household policy, not a kernel-level guarantee.
 - Roblox Studio is not blocked by default.
+- AI can close games automatically: verdicts at 90% confidence or higher are added to the blocked list and closed through the normal grace period. False positives and false negatives are possible. Remove an AI-added game or mark a finding **Not a game** to make AI ignore that executable and path.
 - No software can be guaranteed free of vulnerabilities. This repository uses patched Go tooling, dependency vulnerability scanning, static analysis, CodeQL, and a substantial portable/Windows test suite, but findings should be reported privately.
 
 ### Security checks used
@@ -197,7 +223,7 @@ Security design, accepted risks, and the reporting process are documented in [SE
 
 ## Testing on Windows
 
-The 24-item runbook in [TESTING.html](TESTING.html) covers installation, UAC, SCM registration, ACLs, repair/full reset recovery, first-run PIN setup, LAN access, the Roblox pre-launch guard, game closure, persistence, security boundaries, and uninstall.
+The 28-item runbook in [TESTING.html](TESTING.html) covers installation, UAC, SCM registration, ACLs, repair/full reset recovery, first-run PIN setup, LAN access, the Roblox pre-launch guard, game closure, DeepSeek AI auto-block, AI ignore handling, strange activity, persistence, security boundaries, and uninstall.
 
 Automated tests also run under Wine in development for:
 

@@ -60,6 +60,10 @@ administrator access is outside the protection boundary.
   granting access only to SYSTEM and Administrators. Reparse points are
   rejected. User-owned pre-existing directories are reset before use. The
   SQLite database, WAL/SHM files, and last-known-good backup inherit that DACL.
+- The optional DeepSeek API key is sealed with machine-scoped Windows DPAPI
+  before it is written to SQLite. The dashboard never returns the key, and the
+  service never writes it to audit events or logs. AI monitoring is disabled by
+  default.
 - State changes are committed in SQLite transactions with WAL and full
   synchronous durability. A last-known-good snapshot is kept for recovery, and
   unusable databases are archived rather than overwritten. Initial setup is
@@ -108,12 +112,47 @@ third-party security software may warn about or block these registry writes.
 The installed EXE is also unsigned in this release. Validate the release hash
 and sign binaries for production deployment.
 
+### DeepSeek cloud processing
+
+AI monitoring is optional and off by default. When enabled, the service sends
+the executable name, version-resource product/company/description, and an image
+path with standard Windows user-profile segments redacted to DeepSeek over
+HTTPS. It does not send window titles, command lines, usernames, SIDs, or
+document names. DeepSeek's own retention and privacy terms apply to that
+metadata. When the auto-block toggle is enabled (the default when AI monitoring
+is enabled), a verdict at 0.90 confidence or higher is added to the blocked game
+list and closed through the normal graceful-close path. Lower-confidence
+findings are advisory and never trigger termination. False positives are
+possible; removing an AI-added game or marking a finding **Not a game** writes a
+local ignore entry so that executable/path is skipped entirely and is not sent
+to DeepSeek again. Ignore entries are permanent and bounded to 5,000 rows.
+
+### API key entry over plain HTTP
+
+Any signed-in administrator can set or change the DeepSeek API key from the
+dashboard. The dashboard is plain HTTP on the trusted LAN, so a party who can
+observe LAN traffic while the key is being entered may capture it. Use the
+dashboard only on a trusted private network, prefer entering the key from the
+local PC, and rotate the key if compromise is suspected. The key is sealed with
+machine-scoped DPAPI at rest but is necessarily decrypted in service memory to
+call DeepSeek.
+
+### Key portability
+
+Machine-scoped DPAPI protects the API key against copying the database to
+another computer. The tradeoff is that restoring the database onto a different
+PC makes the saved key unreadable. The service starts normally, disables AI
+calls, and asks the administrator to re-enter the key.
+
 ### No hardware-backed secrets
 
-The SQLite database, PIN hash, configuration, audit history, and backup are
-protected by Windows file ACLs, not a TPM or hardware security module. A local
-administrator or offline attacker with disk access can replace or delete the
-data directory. Sessions are intentionally memory-only and are not stored in
+The SQLite database, PIN hash, configuration, AI settings, AI ignore entries,
+AI key ciphertext, audit history, and backup are protected by Windows file ACLs
+and, for the AI key, DPAPI. They
+are not protected by a TPM or hardware security module. A local administrator
+or offline attacker with disk access can replace or delete the data directory,
+and machine-scoped DPAPI does not protect against a sufficiently privileged
+local attacker. Sessions are intentionally memory-only and are not stored in
 the database.
 
 ## Hardening recommendations

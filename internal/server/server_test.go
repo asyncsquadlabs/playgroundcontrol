@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/enforce"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/store"
 )
 
@@ -82,6 +84,33 @@ func (f *fakeLaunchGuard) callsSnapshot() []bool {
 	return append([]bool(nil), f.calls...)
 }
 
+type fakeAI struct {
+	mu        sync.Mutex
+	testCalls int
+	wakeCount int
+	latency   time.Duration
+	err       error
+}
+
+func (f *fakeAI) Test(_ context.Context) (time.Duration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.testCalls++
+	return f.latency, f.err
+}
+
+func (f *fakeAI) Wake() {
+	f.mu.Lock()
+	f.wakeCount++
+	f.mu.Unlock()
+}
+
+func (f *fakeAI) counts() (tests, wakes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.testCalls, f.wakeCount
+}
+
 type testApp struct {
 	server   *Server
 	http     *httptest.Server
@@ -90,6 +119,7 @@ type testApp struct {
 	store    *store.Store
 	enforcer *fakeEnforcer
 	guard    *fakeLaunchGuard
+	ai       *fakeAI
 	dataDir  string
 }
 
@@ -122,10 +152,12 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 		PendingClosures:     []enforce.Pending{},
 	}}
 	guard := &fakeLaunchGuard{blocked: true}
+	ai := &fakeAI{latency: 25 * time.Millisecond}
 	httpAPI := New(Options{
 		Address:     "127.0.0.1:8080",
 		Version:     "test-version",
 		LaunchGuard: guard,
+		AI:          ai,
 	}, st, authManager, enforcer)
 	ts := httptest.NewServer(httpAPI.Handler())
 	t.Cleanup(ts.Close)
@@ -141,6 +173,7 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 		store:    st,
 		enforcer: enforcer,
 		guard:    guard,
+		ai:       ai,
 		dataDir:  dir,
 	}
 }
@@ -616,5 +649,205 @@ func TestPINPersistsAcrossApplicationRestart(t *testing.T) {
 	}
 	if bootstrap["setupRequired"] != false {
 		t.Fatalf("bootstrap after restart = %+v", bootstrap)
+	}
+}
+
+func TestAISettingsEndpointsNeverExposeKey(t *testing.T) {
+	app := newTestApp(t, true)
+	csrf := app.login(t, "123456")
+
+	result := app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
+		"enabled": true, "autoBlock": true, "model": "deepseek-flash", "apiKey": "sk-test",
+	}, "", "")
+	if result.status != http.StatusForbidden {
+		t.Fatalf("AI settings without CSRF status = %d", result.status)
+	}
+
+	result = app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
+		"enabled": true, "autoBlock": true, "model": "deepseek-flash",
+	}, csrf, "")
+	if result.status != http.StatusBadRequest || !bytes.Contains(result.body, []byte("api_key_required")) {
+		t.Fatalf("enable without key status = %d body=%s", result.status, result.body)
+	}
+
+	const apiKey = "sk-distinctive-test-key-1234"
+	result = app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
+		"enabled": true, "autoBlock": true, "model": "deepseek-flash", "apiKey": apiKey,
+	}, csrf, "")
+	if result.status != http.StatusOK {
+		t.Fatalf("AI settings status = %d body=%s", result.status, result.body)
+	}
+	if bytes.Contains(result.body, []byte(apiKey)) {
+		t.Fatal("AI settings response contained the API key")
+	}
+
+	result = app.request(t, http.MethodGet, "/api/v1/state", nil, "", "")
+	if result.status != http.StatusOK {
+		t.Fatalf("state status = %d body=%s", result.status, result.body)
+	}
+	if bytes.Contains(result.body, []byte(apiKey)) {
+		t.Fatal("state response contained the API key")
+	}
+	state := decodeMap(t, result.body)
+	ai, ok := state["ai"].(map[string]any)
+	if !ok || ai["enabled"] != true || ai["autoBlock"] != true || ai["keyConfigured"] != true || ai["keyHint"] != "1234" {
+		t.Fatalf("unexpected AI view: %+v", state["ai"])
+	}
+	if _, exists := ai["apiKey"]; exists {
+		t.Fatal("AI view exposed an apiKey field")
+	}
+
+	result = app.request(t, http.MethodPost, "/api/v1/ai-settings/test", nil, csrf, "")
+	if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"latencyMs":25`)) {
+		t.Fatalf("AI test status = %d body=%s", result.status, result.body)
+	}
+	if tests, _ := app.ai.counts(); tests != 1 {
+		t.Fatalf("AI test calls = %d, want 1", tests)
+	}
+
+	app.ai.mu.Lock()
+	app.ai.err = errors.New("provider unavailable")
+	app.ai.mu.Unlock()
+	result = app.request(t, http.MethodPost, "/api/v1/ai-settings/test", nil, csrf, "")
+	if result.status != http.StatusBadGateway {
+		t.Fatalf("failed AI test status = %d body=%s", result.status, result.body)
+	}
+	if bytes.Contains(result.body, []byte(apiKey)) {
+		t.Fatal("AI test failure response contained the API key")
+	}
+
+	result = app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
+		"enabled": true, "autoBlock": true, "model": "deepseek-flash", "clearApiKey": true,
+	}, csrf, "")
+	if result.status != http.StatusBadRequest {
+		t.Fatalf("clear while enabled status = %d body=%s", result.status, result.body)
+	}
+	result = app.request(t, http.MethodPut, "/api/v1/ai-settings", map[string]any{
+		"enabled": false, "autoBlock": true, "model": "deepseek-flash", "clearApiKey": true,
+	}, csrf, "")
+	if result.status != http.StatusOK {
+		t.Fatalf("clear key status = %d body=%s", result.status, result.body)
+	}
+	state = decodeMap(t, app.request(t, http.MethodGet, "/api/v1/state", nil, "", "").body)
+	ai = state["ai"].(map[string]any)
+	if ai["keyConfigured"] != false {
+		t.Fatalf("key remained configured: %+v", ai)
+	}
+}
+
+func TestStrangeActivityEndpointsPromoteAndIgnore(t *testing.T) {
+	app := newTestApp(t, true)
+	csrf := app.login(t, "123456")
+
+	first, err := app.store.RecordStrangeActivity(model.StrangeActivity{
+		Name:       "Finding One",
+		Executable: "one.exe",
+		ImagePath:  `C:\Games\one.exe`,
+		Confidence: 0.93,
+		Reason:     "Interactive game client.",
+		Model:      model.DefaultAIModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := app.store.RecordStrangeActivity(model.StrangeActivity{
+		Name:       "Finding Two",
+		Executable: "two.exe",
+		ImagePath:  `C:\Games\two.exe`,
+		Confidence: 0.88,
+		Reason:     "Game emulator.",
+		Model:      model.DefaultAIModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := app.request(t, http.MethodGet, "/api/v1/strange-activity?limit=50", nil, "", "")
+	if result.status != http.StatusOK {
+		t.Fatalf("activity status = %d body=%s", result.status, result.body)
+	}
+	payload := decodeMap(t, result.body)
+	activity, ok := payload["activity"].([]any)
+	if !ok || len(activity) != 2 {
+		t.Fatalf("unexpected activity: %+v", payload)
+	}
+
+	result = app.request(t, http.MethodPost, "/api/v1/strange-activity/"+first.ID+"/block", nil, csrf, "")
+	if result.status != http.StatusCreated {
+		t.Fatalf("promote status = %d body=%s", result.status, result.body)
+	}
+	if len(app.store.Games()) != 1 {
+		t.Fatalf("game was not promoted: %+v", app.store.Games())
+	}
+	if tests, wakes := app.ai.counts(); tests != 0 || wakes != 0 {
+		t.Fatalf("promotion unexpectedly touched AI: tests=%d wakes=%d", tests, wakes)
+	}
+
+	result = app.request(t, http.MethodDelete, "/api/v1/strange-activity/"+second.ID, nil, csrf, "")
+	if result.status != http.StatusNoContent {
+		t.Fatalf("ignore status = %d body=%s", result.status, result.body)
+	}
+	ignored, err := app.store.AIIgnoredKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ignored[model.StrangeActivityKey(second.Executable, second.ImagePath)]; !ok {
+		t.Fatal("ignored finding did not create an AI ignore entry")
+	}
+	result = app.request(t, http.MethodDelete, "/api/v1/strange-activity/"+second.ID, nil, csrf, "")
+	if result.status != http.StatusNotFound {
+		t.Fatalf("repeat ignore status = %d body=%s", result.status, result.body)
+	}
+	result = app.request(t, http.MethodGet, "/api/v1/strange-activity?limit=50", nil, "", "")
+	payload = decodeMap(t, result.body)
+	activity, ok = payload["activity"].([]any)
+	if !ok || len(activity) != 0 {
+		t.Fatalf("activity was not cleared: %+v", payload)
+	}
+}
+
+func TestDeleteAIGameCreatesIgnoreEntry(t *testing.T) {
+	app := newTestApp(t, true)
+	csrf := app.login(t, "123456")
+	if _, err := app.store.SaveAISettings(true, true, model.DefaultAIModel, "sk-test-key-1234", false); err != nil {
+		t.Fatal(err)
+	}
+	game, skipped, err := app.store.AddAIGame(model.Game{
+		Name:       "AI Game",
+		Executable: "ai.exe",
+		ImagePath:  `C:\Games\ai.exe`,
+		Source:     model.GameSourceAI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped {
+		t.Fatal("AI add was unexpectedly skipped")
+	}
+
+	state := decodeMap(t, app.request(t, http.MethodGet, "/api/v1/state", nil, "", "").body)
+	games, ok := state["games"].([]any)
+	if !ok || len(games) != 1 {
+		t.Fatalf("unexpected games: %+v", state["games"])
+	}
+	view, ok := games[0].(map[string]any)
+	if !ok || view["source"] != model.GameSourceAI {
+		t.Fatalf("game source was not exposed: %+v", games[0])
+	}
+
+	result := app.request(t, http.MethodDelete, "/api/v1/games/"+game.ID, nil, csrf, "")
+	if result.status != http.StatusNoContent {
+		t.Fatalf("delete AI game status = %d body=%s", result.status, result.body)
+	}
+	ignored, err := app.store.AIIgnoredKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ignored[model.StrangeActivityKey(game.Executable, game.ImagePath)]; !ok {
+		t.Fatal("deleting an AI game did not create an ignore entry")
+	}
+	result = app.request(t, http.MethodGet, "/api/v1/events?limit=50", nil, "", "")
+	if !bytes.Contains(result.body, []byte("removed-and-ignored")) {
+		t.Fatalf("missing removal audit event: %s", result.body)
 	}
 }

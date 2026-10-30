@@ -12,8 +12,10 @@ import (
 
 	"golang.org/x/sys/windows/svc"
 
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/aiwatch"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/buildinfo"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/deepseek"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/enforce"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/platform"
@@ -26,9 +28,11 @@ type runtimeApp struct {
 	store        *store.Store
 	auth         *auth.Manager
 	enforcer     *enforce.Enforcer
+	aiWatcher    *aiwatch.Watcher
 	httpServer   *http.Server
 	cancel       context.CancelFunc
 	enforcerDone chan struct{}
+	aiDone       chan struct{}
 }
 
 func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, error) {
@@ -100,6 +104,7 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		PollInterval: enforce.DefaultPollInterval,
 		CloseGrace:   enforce.DefaultCloseGrace,
 	})
+	aiWatcher := aiwatch.New(source, st, st, deepseek.NewClient(), st, st, engine, aiwatch.Options{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	engineDone := make(chan struct{})
@@ -107,17 +112,24 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		defer close(engineDone)
 		engine.Run(ctx)
 	}()
+	aiDone := make(chan struct{})
+	go func() {
+		defer close(aiDone)
+		aiWatcher.Run(ctx)
+	}()
 
 	reportPhase(startupPhaseListener)
 	httpAPI := server.New(server.Options{
 		Address:     fmt.Sprintf("0.0.0.0:%d", server.Port),
 		Version:     buildinfo.Version,
 		LaunchGuard: launchGuard,
+		AI:          aiWatcher,
 	}, st, authManager, engine)
 	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", server.Port))
 	if err != nil {
 		cancel()
 		<-engineDone
+		<-aiDone
 		return nil, fmt.Errorf("listen on TCP %d: %w", server.Port, err)
 	}
 	httpServer := &http.Server{
@@ -134,9 +146,11 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 		store:        st,
 		auth:         authManager,
 		enforcer:     engine,
+		aiWatcher:    aiWatcher,
 		httpServer:   httpServer,
 		cancel:       cancel,
 		enforcerDone: engineDone,
+		aiDone:       aiDone,
 	}
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -174,6 +188,13 @@ func (a *runtimeApp) Shutdown() {
 	case <-a.enforcerDone:
 	case <-time.After(5 * time.Second):
 		a.logger.Warningf("enforcement loop did not stop within the timeout")
+	}
+	if a.aiDone != nil {
+		select {
+		case <-a.aiDone:
+		case <-time.After(5 * time.Second):
+			a.logger.Warningf("AI monitoring loop did not stop within the timeout")
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

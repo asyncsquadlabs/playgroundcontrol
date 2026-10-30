@@ -93,6 +93,7 @@
             <h3 class="subsection-title">Additional games</h3>
             <div id="gamesList" class="item-list"></div>
             <p id="gamesEmpty" class="empty" hidden>No additional games are configured. Roblox protection is still active.</p>
+            <p class="hint">Games marked AI were added automatically at 90% confidence or higher. Removing one tells AI to ignore that executable and path; add it manually later to block it again.</p>
             <form id="gameForm" class="compact-form" novalidate>
               <h3>Add another game</h3>
               <label for="gameName">Display name</label>
@@ -115,6 +116,58 @@
             <p class="hint">Roblox is intercepted before launch by the built-in guard. Other protected processes get a clean-close request, then are force-closed after 10 seconds.</p>
           </section>
         </div>
+
+        <section class="panel ai-panel" aria-labelledby="aiTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Optional DeepSeek AI</p>
+              <h2 id="aiTitle">AI monitoring</h2>
+            </div>
+            <span id="aiStatusBadge" class="ai-badge">Off</span>
+          </div>
+          <p id="aiStatusText" class="hint">DeepSeek monitoring is off. No process data leaves this PC.</p>
+          <form id="aiForm" class="compact-form" novalidate>
+            <label class="checkbox-row" for="aiEnabled">
+              <input id="aiEnabled" name="aiEnabled" type="checkbox">
+              <span>Identify unlisted games while play is blocked</span>
+            </label>
+            <label class="checkbox-row" for="aiAutoBlock">
+              <input id="aiAutoBlock" name="aiAutoBlock" type="checkbox">
+              <span>Automatically block high-confidence games</span>
+            </label>
+            <p class="hint">At 90% confidence or higher, AI-added games go to the blocked list and are closed with the normal 10-second grace period. Turning this off stops new automatic blocks but does not remove existing AI-added games.</p>
+            <label for="aiModel">DeepSeek model</label>
+            <input id="aiModel" name="aiModel" type="text" maxlength="64" autocomplete="off" spellcheck="false" list="aiModelOptions" placeholder="deepseek-flash">
+            <datalist id="aiModelOptions">
+              <option value="deepseek-flash"></option>
+              <option value="deepseek-v4-pro"></option>
+            </datalist>
+            <label for="aiKey">DeepSeek API key</label>
+            <input id="aiKey" name="aiKey" type="password" maxlength="512" autocomplete="off" spellcheck="false" placeholder="Enter a DeepSeek API key">
+            <p id="aiKeyState" class="hint">No API key configured.</p>
+            <p class="hint">When you save a key and enable monitoring, executable names, version-resource product/company/description, and an image path with the Windows username redacted are sent over HTTPS to DeepSeek while play is blocked. No window titles, command lines, usernames, or document names are sent. High-confidence games are auto-blocked when that option is on; lower-confidence findings appear below for review.</p>
+            <div class="button-row">
+              <button type="submit" class="secondary">Save AI settings</button>
+              <button id="aiTestButton" type="button" class="secondary">Test connection</button>
+              <button id="aiRemoveKeyButton" type="button" class="small-danger" hidden>Remove key</button>
+            </div>
+          </form>
+          <p id="aiLastVerified" class="hint"></p>
+          <p id="aiError" class="hint ai-error" hidden></p>
+        </section>
+
+        <section class="panel" aria-labelledby="strangeTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">DeepSeek findings</p>
+              <h2 id="strangeTitle">Strange activity</h2>
+            </div>
+            <span id="strangeCount" class="count">Latest 50</span>
+          </div>
+          <div id="strangeActivityList" class="item-list"></div>
+          <p id="strangeActivityEmpty" class="empty" hidden>No lower-confidence findings need review.</p>
+          <p class="hint">These are lower-confidence findings. Choose Add to blocked games, or Not a game so AI ignores that executable and path. High-confidence games are added directly to the blocked list. Repeated sightings update one finding.</p>
+        </section>
 
         <section class="panel">
           <div class="panel-heading">
@@ -164,7 +217,7 @@
 
     <footer>
       <span>Local network only</span>
-      <span>No cloud service or telemetry</span>
+      <span>Optional DeepSeek AI; off by default</span>
     </footer>
   </div>
   <script src="/assets/app.js" defer></script>

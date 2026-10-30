@@ -15,6 +15,7 @@ import (
 
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/secret"
 )
 
 // ErrDuplicateGame is returned when an identical executable/path pair already
@@ -32,23 +33,37 @@ type Store struct {
 	dbPath     string
 	backupPath string
 	now        func() time.Time
+	codec      secret.Codec
 	db         *sql.DB
 
 	mu         sync.RWMutex
 	cfg        model.Config
+	ai         model.AISettings
+	aiKey      string
 	loadNotice string
 
-	auditMu  sync.Mutex
-	backupMu sync.Mutex
+	auditMu   sync.Mutex
+	strangeMu sync.Mutex
+	backupMu  sync.Mutex
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
-// Open opens or creates the database in dir and loads the current state.
+// Open opens or creates the database in dir and loads the current state using
+// the production secret codec.
 func Open(dir string, now func() time.Time) (*Store, error) {
+	return OpenWithCodec(dir, now, secret.DefaultCodec())
+}
+
+// OpenWithCodec opens the database with an injected secret codec. Tests use
+// this to verify sealing without depending on Windows DPAPI.
+func OpenWithCodec(dir string, now func() time.Time, codec secret.Codec) (*Store, error) {
 	if now == nil {
 		now = time.Now
+	}
+	if codec == nil {
+		codec = secret.DefaultCodec()
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
@@ -58,7 +73,9 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 		dbPath:     databasePath(dir),
 		backupPath: backupPath(dir),
 		now:        now,
+		codec:      codec,
 		cfg:        model.DefaultConfig(),
+		ai:         model.DefaultAISettings(),
 	}
 	db, notice, err := s.openDatabase()
 	if err != nil {
@@ -70,6 +87,9 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 		_ = s.db.Close()
 		s.db = nil
 		return nil, err
+	}
+	if err := s.loadAISettings(); err != nil {
+		s.appendNotice(fmt.Sprintf("AI settings could not be loaded: %v", err))
 	}
 	return s, nil
 }
@@ -170,41 +190,101 @@ func (s *Store) persistPlayState(next model.Config) error {
 	return nil
 }
 
-// AddGame validates, persists, and adds a game.
+// AddGame validates, persists, and adds an administrator-managed game.
 func (s *Store) AddGame(g model.Game) (model.Game, error) {
+	game, _, err := s.addGame(g, false)
+	return game, err
+}
+
+// AddAIGame atomically adds an AI-blocked game only while play is blocked, AI
+// auto-block is enabled, and the executable/path is not ignored. The bool
+// reports that the add was intentionally skipped.
+func (s *Store) AddAIGame(g model.Game) (model.Game, bool, error) {
+	return s.addGame(g, true)
+}
+
+func (s *Store) addGame(g model.Game, ai bool) (model.Game, bool, error) {
+	if ai {
+		g.Source = model.GameSourceAI
+	} else {
+		g.Source = model.GameSourceParent
+	}
 	normalized, err := model.NormalizeGame(g)
 	if err != nil {
-		return model.Game{}, err
+		return model.Game{}, false, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.strangeMu.Lock()
+	defer s.strangeMu.Unlock()
+
+	if ai {
+		if s.cfg.PlayAllowed || !s.ai.Enabled || !s.ai.AutoBlock {
+			return model.Game{}, true, nil
+		}
+	}
 
 	key := model.GameKey(normalized)
 	for _, existing := range s.cfg.Games {
 		if model.GameKey(existing) == key {
-			return model.Game{}, ErrDuplicateGame
+			if ai {
+				return existing, true, nil
+			}
+			return model.Game{}, false, ErrDuplicateGame
 		}
 	}
 
 	if s.db == nil {
-		return model.Game{}, errors.New("database is not open")
+		return model.Game{}, false, errors.New("database is not open")
 	}
-	_, err = s.db.Exec(
-		`INSERT INTO games (id, game_key, name, executable, image_path, added_at) VALUES (?, ?, ?, ?, ?, ?)`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return model.Game{}, false, fmt.Errorf("begin add game: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	activityKey := model.StrangeActivityKey(normalized.Executable, normalized.ImagePath)
+	if ai {
+		var ignored int
+		err := tx.QueryRow(`SELECT 1 FROM ai_ignored WHERE activity_key = ?`, activityKey).Scan(&ignored)
+		if err == nil {
+			return model.Game{}, true, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return model.Game{}, false, fmt.Errorf("check AI ignore entry: %w", err)
+		}
+	}
+	_, err = tx.Exec(
+		`INSERT INTO games (id, game_key, name, executable, image_path, source, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		normalized.ID,
 		key,
 		normalized.Name,
 		normalized.Executable,
 		normalized.ImagePath,
+		normalized.Source,
 		formatTime(normalized.AddedAt),
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return model.Game{}, ErrDuplicateGame
+			if ai {
+				return model.Game{}, true, nil
+			}
+			return model.Game{}, false, ErrDuplicateGame
 		}
-		return model.Game{}, fmt.Errorf("save game: %w", err)
+		return model.Game{}, false, fmt.Errorf("save game: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM ai_ignored WHERE activity_key = ?`, activityKey); err != nil {
+		return model.Game{}, false, fmt.Errorf("clear AI ignore entry: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Game{}, false, fmt.Errorf("commit add game: %w", err)
+	}
+	committed = true
 
 	next := cloneConfig(s.cfg)
 	next.Games = append(next.Games, normalized)
@@ -212,7 +292,7 @@ func (s *Store) AddGame(g model.Game) (model.Game, error) {
 	if err := s.refreshBackup(); err != nil {
 		s.loadNotice = appendNoticeText(s.loadNotice, fmt.Sprintf("could not refresh database backup: %v", err))
 	}
-	return normalized, nil
+	return normalized, false, nil
 }
 
 // DeleteGame removes a configured game. The returned bool reports whether an
@@ -220,11 +300,31 @@ func (s *Store) AddGame(g model.Game) (model.Game, error) {
 func (s *Store) DeleteGame(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.strangeMu.Lock()
+	defer s.strangeMu.Unlock()
 
 	if s.db == nil {
 		return false, errors.New("database is not open")
 	}
-	result, err := s.db.Exec(`DELETE FROM games WHERE id = ?`, id)
+	var found model.Game
+	for _, game := range s.cfg.Games {
+		if game.ID == id {
+			found = game
+			break
+		}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin delete game: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	result, err := tx.Exec(`DELETE FROM games WHERE id = ?`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete game: %w", err)
 	}
@@ -235,6 +335,15 @@ func (s *Store) DeleteGame(id string) (bool, error) {
 	if affected == 0 {
 		return false, nil
 	}
+	if found.ID != "" && found.Source == model.GameSourceAI {
+		if err := insertAIIgnored(tx, found.Name, found.Executable, found.ImagePath, s.now().UTC()); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit delete game: %w", err)
+	}
+	committed = true
 
 	next := cloneConfig(s.cfg)
 	out := next.Games[:0]
@@ -268,7 +377,7 @@ func (s *Store) loadConfig() error {
 	cfg.LastChangedAt = parseTime(lastChangedAt.String)
 	cfg.LastChangedBy = lastChangedBy.String
 
-	rows, err := s.db.Query(`SELECT id, name, executable, image_path, added_at FROM games ORDER BY added_at, id`)
+	rows, err := s.db.Query(`SELECT id, name, executable, image_path, source, added_at FROM games ORDER BY added_at, id`)
 	if err != nil {
 		return fmt.Errorf("load games: %w", err)
 	}
@@ -277,7 +386,7 @@ func (s *Store) loadConfig() error {
 	for rows.Next() {
 		var game model.Game
 		var addedAt string
-		if err := rows.Scan(&game.ID, &game.Name, &game.Executable, &game.ImagePath, &addedAt); err != nil {
+		if err := rows.Scan(&game.ID, &game.Name, &game.Executable, &game.ImagePath, &game.Source, &addedAt); err != nil {
 			return fmt.Errorf("load game: %w", err)
 		}
 		game.AddedAt = parseTime(addedAt)

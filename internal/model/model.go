@@ -4,9 +4,11 @@ package model
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -19,6 +21,14 @@ const (
 	EventAuth        = "auth"
 	EventEnforcement = "enforcement"
 	EventSystem      = "system"
+	EventAI          = "ai"
+
+	DefaultAIModel = "deepseek-flash"
+
+	// GameSourceParent marks a game added by the administrator.
+	GameSourceParent = "parent"
+	// GameSourceAI marks a game automatically blocked from a DeepSeek verdict.
+	GameSourceAI = "ai"
 )
 
 // Config is the validated play state shared by persistence, the enforcer, and
@@ -37,11 +47,13 @@ type Game struct {
 	Name       string    `json:"name"`
 	Executable string    `json:"executable"`
 	ImagePath  string    `json:"imagePath,omitempty"`
+	Source     string    `json:"source"`
 	AddedAt    time.Time `json:"addedAt"`
 }
 
 // AuditEvent is a non-secret, bounded record of an administrative or
-// enforcement action. PINs, tokens, and cookies must never be placed here.
+// enforcement action. PINs, tokens, API keys, and cookies must never be placed
+// here.
 type AuditEvent struct {
 	Time     time.Time `json:"time"`
 	Type     string    `json:"type"`
@@ -51,6 +63,125 @@ type AuditEvent struct {
 	GameName string    `json:"gameName,omitempty"`
 	PID      uint32    `json:"pid,omitempty"`
 	Result   string    `json:"result,omitempty"`
+}
+
+// AISettings is the non-secret view of DeepSeek monitoring configuration. The
+// API key is deliberately not part of this type so it cannot be serialized
+// accidentally.
+type AISettings struct {
+	Enabled        bool      `json:"enabled"`
+	AutoBlock      bool      `json:"autoBlock"`
+	Model          string    `json:"model"`
+	KeyConfigured  bool      `json:"keyConfigured"`
+	KeyHint        string    `json:"keyHint,omitempty"`
+	LastVerifiedAt time.Time `json:"lastVerifiedAt"`
+	LastError      string    `json:"lastError,omitempty"`
+}
+
+// DefaultAISettings returns AI monitoring defaults. Monitoring itself stays
+// off, while high-confidence auto-block is enabled once a parent turns AI on.
+func DefaultAISettings() AISettings {
+	return AISettings{Model: DefaultAIModel, AutoBlock: true}
+}
+
+// StrangeActivity is one AI-identified game that was running while play was
+// blocked and was not already covered by the configured or built-in game list.
+// It is evidence for a parent, not an enforcement instruction.
+type StrangeActivity struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Executable      string    `json:"executable"`
+	ImagePath       string    `json:"imagePath,omitempty"`
+	ProductName     string    `json:"productName,omitempty"`
+	CompanyName     string    `json:"companyName,omitempty"`
+	FileDescription string    `json:"fileDescription,omitempty"`
+	Confidence      float64   `json:"confidence"`
+	Reason          string    `json:"reason"`
+	FirstSeen       time.Time `json:"firstSeen"`
+	LastSeen        time.Time `json:"lastSeen"`
+	SeenCount       int64     `json:"seenCount"`
+	LastPID         uint32    `json:"lastPid,omitempty"`
+	Model           string    `json:"model"`
+}
+
+// NormalizeStrangeActivity trims and bounds an AI finding. It returns a copy.
+func NormalizeStrangeActivity(a StrangeActivity) (StrangeActivity, error) {
+	a.Name = strings.TrimSpace(a.Name)
+	a.Executable = strings.TrimSpace(a.Executable)
+	a.ImagePath = normalizeProcessPath(a.ImagePath)
+	a.ProductName = truncateText(strings.TrimSpace(a.ProductName), 200)
+	a.CompanyName = truncateText(strings.TrimSpace(a.CompanyName), 200)
+	a.FileDescription = truncateText(strings.TrimSpace(a.FileDescription), 200)
+	a.Reason = truncateText(strings.TrimSpace(a.Reason), 300)
+	a.Model = truncateText(strings.TrimSpace(a.Model), 64)
+
+	if a.Name == "" || containsControl(a.Name) {
+		return StrangeActivity{}, errors.New("strange activity display name is required")
+	}
+	a.Name = truncateText(a.Name, 80)
+	if a.Executable == "" || containsControl(a.Executable) || len(a.Executable) > 255 {
+		return StrangeActivity{}, errors.New("strange activity executable is invalid")
+	}
+	if strings.ContainsAny(a.Executable, `/\`) {
+		return StrangeActivity{}, errors.New("strange activity executable must be a file name")
+	}
+	if containsControl(a.ImagePath) || len(a.ImagePath) > 32767 {
+		return StrangeActivity{}, errors.New("strange activity image path is invalid")
+	}
+	if math.IsNaN(a.Confidence) || math.IsInf(a.Confidence, 0) {
+		return StrangeActivity{}, errors.New("strange activity confidence is invalid")
+	}
+	if a.Confidence < 0 {
+		a.Confidence = 0
+	}
+	if a.Confidence > 1 {
+		a.Confidence = 1
+	}
+	if a.Reason == "" {
+		a.Reason = "DeepSeek identified this process as a game."
+	}
+	now := time.Now().UTC()
+	if a.FirstSeen.IsZero() {
+		a.FirstSeen = now
+	} else {
+		a.FirstSeen = a.FirstSeen.UTC()
+	}
+	if a.LastSeen.IsZero() {
+		a.LastSeen = a.FirstSeen
+	} else {
+		a.LastSeen = a.LastSeen.UTC()
+	}
+	if a.SeenCount < 1 {
+		a.SeenCount = 1
+	}
+	if a.ID == "" {
+		id, err := NewID()
+		if err != nil {
+			return StrangeActivity{}, err
+		}
+		a.ID = id
+	} else if len(a.ID) > 64 || containsControl(a.ID) || strings.ContainsAny(a.ID, `/\`) {
+		return StrangeActivity{}, errors.New("invalid strange activity ID")
+	}
+	if a.Model == "" {
+		a.Model = DefaultAIModel
+	}
+	return a, nil
+}
+
+// StrangeActivityKey returns the stable deduplication key for a process.
+func StrangeActivityKey(executable, imagePath string) string {
+	key := strings.ToLower(strings.TrimSpace(executable)) + "\x00" +
+		strings.ToLower(normalizeProcessPath(imagePath))
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+func truncateText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }
 
 // DefaultConfig returns a fresh, fail-closed configuration.
@@ -165,6 +296,14 @@ func NormalizeGame(g Game) (Game, error) {
 		g.ID = id
 	} else if len(g.ID) > 64 || containsControl(g.ID) || strings.ContainsAny(g.ID, `/\`) {
 		return Game{}, errors.New("invalid game ID")
+	}
+	switch strings.ToLower(strings.TrimSpace(g.Source)) {
+	case "", GameSourceParent:
+		g.Source = GameSourceParent
+	case GameSourceAI:
+		g.Source = GameSourceAI
+	default:
+		return Game{}, errors.New("game source must be parent or ai")
 	}
 	if g.AddedAt.IsZero() {
 		g.AddedAt = time.Now().UTC()
