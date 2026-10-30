@@ -120,6 +120,7 @@ type testApp struct {
 	enforcer *fakeEnforcer
 	guard    *fakeLaunchGuard
 	ai       *fakeAI
+	browser  *fakeBrowser
 	dataDir  string
 }
 
@@ -153,11 +154,13 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 	}}
 	guard := &fakeLaunchGuard{blocked: true}
 	ai := &fakeAI{latency: 25 * time.Millisecond}
+	browser := &fakeBrowser{status: model.BrowserStatus{Browsers: []string{"chrome"}}}
 	httpAPI := New(Options{
 		Address:     "127.0.0.1:8080",
 		Version:     "test-version",
 		LaunchGuard: guard,
 		AI:          ai,
+		Browser:     browser,
 	}, st, authManager, enforcer)
 	ts := httptest.NewServer(httpAPI.Handler())
 	t.Cleanup(ts.Close)
@@ -174,6 +177,7 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 		enforcer: enforcer,
 		guard:    guard,
 		ai:       ai,
+		browser:  browser,
 		dataDir:  dir,
 	}
 }

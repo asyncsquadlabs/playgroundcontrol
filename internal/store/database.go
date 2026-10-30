@@ -67,6 +67,45 @@ var schemaStatements = []string{
 	)`,
 }
 
+var schemaV3Statements = []string{
+	`CREATE TABLE IF NOT EXISTS browser_settings (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+		auto_block INTEGER NOT NULL DEFAULT 1 CHECK (auto_block IN (0, 1)),
+		ai_classification INTEGER NOT NULL DEFAULT 0 CHECK (ai_classification IN (0, 1)),
+		last_scan_at TEXT,
+		last_error TEXT NOT NULL DEFAULT '',
+		last_error_at TEXT
+	)`,
+	`CREATE TABLE IF NOT EXISTS browser_domains (
+		id TEXT PRIMARY KEY,
+		domain TEXT NOT NULL UNIQUE,
+		source TEXT NOT NULL DEFAULT 'manual',
+		status TEXT NOT NULL DEFAULT 'blocked',
+		confidence REAL NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT '',
+		first_seen TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		seen_count INTEGER NOT NULL DEFAULT 1,
+		model TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_domains_status
+		ON browser_domains(status, updated_at DESC, id DESC)`,
+	`CREATE TABLE IF NOT EXISTS browser_detections (
+		seq INTEGER PRIMARY KEY AUTOINCREMENT,
+		time TEXT NOT NULL,
+		browser TEXT NOT NULL,
+		domain TEXT NOT NULL,
+		source TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_detections_time
+		ON browser_detections(time DESC, seq DESC)`,
+}
+
 var schemaV2Statements = []string{
 	`CREATE TABLE IF NOT EXISTS ai_settings (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -217,8 +256,8 @@ func migrate(db *sql.DB) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if version > 2 {
-		return fmt.Errorf("database schema version %d is newer than the supported version 2", version)
+	if version > 3 {
+		return fmt.Errorf("database schema version %d is newer than the supported version 3", version)
 	}
 
 	tx, err := db.Begin()
@@ -234,6 +273,7 @@ func migrate(db *sql.DB) error {
 
 	statements := append([]string(nil), schemaStatements...)
 	statements = append(statements, schemaV2Statements...)
+	statements = append(statements, schemaV3Statements...)
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement); err != nil {
 			return fmt.Errorf("create schema: %w", err)
@@ -247,13 +287,20 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE ai_settings ADD COLUMN auto_block INTEGER NOT NULL DEFAULT 1`); err != nil {
 		return err
 	}
+	if err := ensureColumn(tx, "audit_events", "domain",
+		`ALTER TABLE audit_events ADD COLUMN domain TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO app_state (id, play_allowed, last_changed_at, last_changed_by) VALUES (1, 0, NULL, '')`); err != nil {
 		return fmt.Errorf("initialize app state: %w", err)
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO ai_settings (id, enabled, auto_block, model, api_key_enc, key_hint, last_verified_at, last_error, last_error_at) VALUES (1, 0, 1, ?, X'', '', NULL, '', NULL)`, "deepseek-flash"); err != nil {
 		return fmt.Errorf("initialize AI settings: %w", err)
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO browser_settings (id, enabled, auto_block, ai_classification, last_scan_at, last_error, last_error_at) VALUES (1, 0, 1, 0, NULL, '', NULL)`); err != nil {
+		return fmt.Errorf("initialize browser settings: %w", err)
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

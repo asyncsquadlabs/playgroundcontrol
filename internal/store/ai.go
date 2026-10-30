@@ -56,6 +56,10 @@ func (s *Store) SaveAISettings(enabled, autoBlock bool, modelName, apiKey string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if clearKey && s.browser.AIClassification {
+		return model.AISettings{}, fmt.Errorf("%w: disable browser AI classification before removing the API key", ErrAIConfiguration)
+	}
+
 	if s.db == nil {
 		return model.AISettings{}, errors.New("database is not open")
 	}

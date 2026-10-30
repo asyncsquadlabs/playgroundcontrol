@@ -21,6 +21,7 @@ import (
 
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/auth"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/enforce"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/store"
 )
 
@@ -56,6 +57,13 @@ type AIMonitor interface {
 	Wake()
 }
 
+// BrowserMonitor accepts wake requests and reports browser-control status.
+type BrowserMonitor interface {
+	Wake()
+	Sync() error
+	Status() model.BrowserStatus
+}
+
 // Options configures a Server.
 type Options struct {
 	Address      string
@@ -64,6 +72,7 @@ type Options struct {
 	Now          func() time.Time
 	LaunchGuard  LaunchGuard
 	AI           AIMonitor
+	Browser      BrowserMonitor
 }
 
 // Server holds process-wide dependencies. It is safe to construct once and
@@ -74,6 +83,7 @@ type Server struct {
 	enforcer    Enforcer
 	launchGuard LaunchGuard
 	ai          AIMonitor
+	browser     BrowserMonitor
 	version     string
 	address     string
 	now         func() time.Time
@@ -104,6 +114,7 @@ func New(options Options, st *store.Store, authManager *auth.Manager, enforcer E
 		enforcer:     enforcer,
 		launchGuard:  options.LaunchGuard,
 		ai:           options.AI,
+		browser:      options.Browser,
 		version:      options.Version,
 		address:      options.Address,
 		now:          options.Now,
@@ -144,6 +155,12 @@ func (s *Server) buildHandler() http.Handler {
 	mux.Handle("GET /api/v1/events", s.withAuth(s.handleEvents))
 	mux.Handle("PUT /api/v1/ai-settings", s.withMutation(s.handleAISettings))
 	mux.Handle("POST /api/v1/ai-settings/test", s.withMutation(s.handleTestAI))
+	mux.Handle("GET /api/v1/browser", s.withAuth(s.handleBrowser))
+	mux.Handle("PUT /api/v1/browser/settings", s.withMutation(s.handleBrowserSettings))
+	mux.Handle("GET /api/v1/browser/domains", s.withAuth(s.handleBrowserDomains))
+	mux.Handle("POST /api/v1/browser/domains", s.withMutation(s.handleAddBrowserDomain))
+	mux.Handle("PUT /api/v1/browser/domains/{id}", s.withMutation(s.handleSetBrowserDomainStatus))
+	mux.Handle("GET /api/v1/browser/detections", s.withAuth(s.handleBrowserDetections))
 	mux.Handle("GET /api/v1/strange-activity", s.withAuth(s.handleStrangeActivity))
 	mux.Handle("POST /api/v1/strange-activity/{id}/block", s.withMutation(s.handleBlockStrangeActivity))
 	mux.Handle("DELETE /api/v1/strange-activity/{id}", s.withMutation(s.handleIgnoreStrangeActivity))

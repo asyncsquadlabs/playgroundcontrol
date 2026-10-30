@@ -21,6 +21,18 @@ https://pkg.go.dev/golang.org/x/sys
 
 Copyright 2009 The Go Authors. All rights reserved.
 
+## golang.org/x/net
+
+https://pkg.go.dev/golang.org/x/net
+
+Copyright 2009 The Go Authors. All rights reserved.
+
+## golang.org/x/text
+
+https://pkg.go.dev/golang.org/x/text
+
+Copyright 2009 The Go Authors. All rights reserved.
+
 ## modernc.org/sqlite and its dependencies
 
 https://pkg.go.dev/modernc.org/sqlite

@@ -165,6 +165,14 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+type browserSummary struct {
+	Settings     model.BrowserSettings `json:"settings"`
+	Status       model.BrowserStatus   `json:"status"`
+	BlockedCount int                   `json:"blockedCount"`
+	ReviewCount  int                   `json:"reviewCount"`
+	AllowedCount int                   `json:"allowedCount"`
+}
+
 type stateResponse struct {
 	PlayAllowed         bool              `json:"playAllowed"`
 	Games               []model.Game      `json:"games"`
@@ -178,6 +186,7 @@ type stateResponse struct {
 	CSRFToken           string            `json:"csrfToken"`
 	Warnings            []string          `json:"warnings"`
 	AI                  model.AISettings  `json:"ai"`
+	Browser             browserSummary    `json:"browser"`
 }
 
 func (s *Server) state(session auth.Session) stateResponse {
@@ -220,6 +229,41 @@ func (s *Server) state(session auth.Session) stateResponse {
 	if aiSettings.Enabled && aiSettings.LastError != "" {
 		warnings = append(warnings, "AI monitoring is reporting an error: "+aiSettings.LastError)
 	}
+	browserSettings := s.store.BrowserSettings()
+	browserStatus := model.BrowserStatus{Browsers: []string{}}
+	if s.browser != nil {
+		browserStatus = s.browser.Status()
+	}
+	blockedCount, reviewCount, allowedCount, countsErr := s.store.BrowserDomainCounts()
+	if countsErr != nil {
+		warnings = append(warnings, "Browser domain counts could not be read: "+countsErr.Error())
+	}
+	if browserSettings.Enabled && browserSettings.LastError != "" {
+		warnings = append(warnings, "Browser monitoring is reporting an error: "+browserSettings.LastError)
+	}
+	if browserSettings.Enabled && browserStatus.LastError != "" && browserStatus.LastError != browserSettings.LastError {
+		warnings = append(warnings, "Browser controls are reporting an error: "+browserStatus.LastError)
+	}
+	if browserSettings.Enabled && len(browserStatus.Browsers) == 0 {
+		warnings = append(warnings, "Browser monitoring is enabled, but Chrome or Edge was not detected on this PC.")
+	}
+	if browserSettings.Enabled && !cfg.PlayAllowed && blockedCount > 0 &&
+		(!browserStatus.URLBlocklistApplied || !browserStatus.HostsApplied) {
+		warnings = append(warnings, "Browser game blocking is not fully active. The service will retry; check the browser panel for details.")
+	}
+	if (!browserSettings.Enabled || cfg.PlayAllowed) &&
+		(browserStatus.URLBlocklistApplied || browserStatus.HostsApplied || browserStatus.DoHDisabled) {
+		warnings = append(warnings, "Browser controls are still active although browser blocking should be off. The service will retry; check the browser panel for details.")
+	}
+	if browserSettings.Enabled && browserSettings.AIClassification && !browserSettings.KeyConfigured {
+		warnings = append(warnings, "Browser AI classification is enabled but no usable DeepSeek API key is configured.")
+	}
+	if blockedCount >= store.MaxBrowserDomains {
+		warnings = append(warnings, "The blocked browser domain limit has been reached; additional detections are not enforced until another domain is allowed.")
+	}
+	if browserStatus.DriftDetected {
+		warnings = append(warnings, "Browser policies or hosts entries were modified outside Playground Control and were repaired.")
+	}
 	games := cfg.Games
 	if games == nil {
 		games = []model.Game{}
@@ -237,6 +281,13 @@ func (s *Server) state(session auth.Session) stateResponse {
 		CSRFToken:           session.CSRF,
 		Warnings:            warnings,
 		AI:                  aiSettings,
+		Browser: browserSummary{
+			Settings:     browserSettings,
+			Status:       browserStatus,
+			BlockedCount: blockedCount,
+			ReviewCount:  reviewCount,
+			AllowedCount: allowedCount,
+		},
 	}
 }
 
@@ -316,6 +367,10 @@ func (s *Server) handlePlayState(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.ai != nil {
 		s.ai.Wake()
+	}
+	if s.browser != nil {
+		_ = s.browser.Sync()
+		s.browser.Wake()
 	}
 	writeJSON(w, http.StatusOK, s.state(session))
 }

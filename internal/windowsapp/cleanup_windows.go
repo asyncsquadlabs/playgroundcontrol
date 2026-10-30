@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc/eventlog"
 
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/browsercontrol"
 	"github.com/asyncsquadlabs/playgroundcontrol/internal/platform"
 )
 
@@ -26,6 +27,10 @@ func (windowsCleanupOps) DeleteService() error {
 
 func (windowsCleanupOps) RemoveRobloxGuard() error {
 	return platform.RemoveRobloxGuard()
+}
+
+func (windowsCleanupOps) RestoreBrowserControls() error {
+	return browsercontrol.Restore(dataDir())
 }
 
 func (windowsCleanupOps) RemoveFirewallRule() error {

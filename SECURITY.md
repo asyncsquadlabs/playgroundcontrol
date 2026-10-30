@@ -62,8 +62,20 @@ administrator access is outside the protection boundary.
   SQLite database, WAL/SHM files, and last-known-good backup inherit that DACL.
 - The optional DeepSeek API key is sealed with machine-scoped Windows DPAPI
   before it is written to SQLite. The dashboard never returns the key, and the
-  service never writes it to audit events or logs. AI monitoring is disabled by
-  default.
+  service never writes it to audit events or logs. AI monitoring and browser
+  monitoring are disabled by default.
+- Optional browser monitoring reads stable Chrome and Edge History databases for
+  interactive users, reduces each visit to its registrable domain, and persists
+  only that domain plus source, confidence, reason, and timestamps. It never
+  stores full URLs, paths, query strings, page titles, cookies, or profile
+  paths. History snapshots are written under the protected ProgramData
+  directory and deleted after each read. Unknown domains are sent to DeepSeek
+  only when the parent enables browser AI classification.
+- Browser enforcement writes machine-wide Chrome/Edge `URLBlocklist` policy
+  values, a marked hosts-file block, and DoH-disable policy values only while
+  play is blocked and monitoring is enabled. A protected backup manifest and
+  hosts snapshot let uninstall/reset remove only Playground Control-managed
+  values and restore pre-existing policy and hosts content.
 - State changes are committed in SQLite transactions with WAL and full
   synchronous durability. A last-known-good snapshot is kept for recovery, and
   unusable databases are archived rather than overwritten. Initial setup is
@@ -94,6 +106,15 @@ expensive, but the PIN does not have the entropy of a long password. Choose an
 An administrator can stop the service, modify or remove the IFEO entries,
 uninstall the product, or change the executable. No user-mode parental-control
 service can prevent that.
+
+### Browser enforcement is not a security boundary
+
+Browser monitoring depends on readable Chrome/Edge History databases, policy
+registry writes, and a writable hosts file. Antivirus/EDR may block the hosts
+change, browsers may be running from unsupported or portable profiles, and a
+local administrator can remove or override the policies. The dashboard reports
+failures and repairs detected drift, but enforcement should be treated as
+household deterrence, not a network-wide filter.
 
 ### Game enforcement is not a security boundary
 
@@ -127,6 +148,38 @@ possible; removing an AI-added game or marking a finding **Not a game** writes a
 local ignore entry so that executable/path is skipped entirely and is not sent
 to DeepSeek again. Ignore entries are permanent and bounded to 5,000 rows.
 
+Browser AI classification is a separate opt-in toggle. When enabled, only the
+registrable domain of an unknown browser host is sent to DeepSeek, never the
+full URL, path, query string, page title, or profile path. Verdicts are cached
+locally for 24 hours. A verdict at 0.90 confidence or higher auto-blocks when
+the parent enabled browser auto-block; 0.70-0.899 creates a review finding; lower
+verdicts are ignored. Domains are bounded and detections retain the newest 5,000
+rows. A parent **Allow** decision persists and overrides future seed/AI
+detections until the parent blocks the domain again.
+
+### Browser history polling and open tabs
+
+Browser monitoring is retrospective. It polls Chrome/Edge History every 15
+seconds and applies policy and hosts changes to the next navigation or reload.
+An already-open game tab may remain usable because an established connection is
+not terminated; the extension-based live detection and tab-closing design is not
+part of the 1.4.0 release. Chrome/Edge may also cache DNS results briefly, and a
+browser restart may be required for DoH policy changes to take full effect.
+Incognito/InPrivate sessions, guest profiles, portable browsers, custom
+`--user-data-dir` profiles, and other browser families are not monitored by
+history polling. Policy and hosts enforcement still applies to the installed
+browsers while play is blocked.
+
+### Browser DoH disablement
+
+While browser blocking is active, the service sets `DnsOverHttpsMode=off` and
+`BuiltInDnsClientEnabled=0` for Chrome and Edge so the hosts block is effective.
+This weakens browser DNS privacy for the duration. Original values are recorded
+in the protected backup manifest and restored when play is allowed, monitoring
+is disabled, or the product is uninstalled. A local administrator can change
+these policies, the hosts file, or the service; tamper detection in the dashboard
+is informational and not a security boundary.
+
 ### API key entry over plain HTTP
 
 Any signed-in administrator can set or change the DeepSeek API key from the
@@ -147,8 +200,8 @@ calls, and asks the administrator to re-enter the key.
 ### No hardware-backed secrets
 
 The SQLite database, PIN hash, configuration, AI settings, AI ignore entries,
-AI key ciphertext, audit history, and backup are protected by Windows file ACLs
-and, for the AI key, DPAPI. They
+browser domains and detections, AI key ciphertext, audit history, and backup are
+protected by Windows file ACLs and, for the AI key, DPAPI. They
 are not protected by a TPM or hardware security module. A local administrator
 or offline attacker with disk access can replace or delete the data directory,
 and machine-scoped DPAPI does not protect against a sufficiently privileged
