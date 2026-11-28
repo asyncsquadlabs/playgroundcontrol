@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 )
 
 func newTestApplier(t *testing.T, hostsContent string) *WindowsApplier {
@@ -23,8 +25,14 @@ func newTestApplier(t *testing.T, hostsContent string) *WindowsApplier {
 	}
 	applier := newWindowsApplier(
 		registry.CURRENT_USER,
-		rootName+`\Chrome`,
-		rootName+`\Edge`,
+		map[string]string{
+			model.BrowserChrome:   rootName + `\Chrome`,
+			model.BrowserEdge:     rootName + `\Edge`,
+			model.BrowserBrave:    rootName + `\Brave`,
+			model.BrowserVivaldi:  rootName + `\Vivaldi`,
+			model.BrowserChromium: rootName + `\Chromium`,
+			model.BrowserFirefox:  rootName + `\Firefox`,
+		},
 		hostsPath,
 		t.TempDir(),
 	)
@@ -34,7 +42,7 @@ func newTestApplier(t *testing.T, hostsContent string) *WindowsApplier {
 
 func seedExistingPolicies(t *testing.T, applier *WindowsApplier) {
 	t.Helper()
-	listKey, _, err := registry.CreateKey(registry.CURRENT_USER, applier.chromeKey+`\URLBlocklist`, registry.WRITE)
+	listKey, _, err := registry.CreateKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserChrome]+`\URLBlocklist`, registry.WRITE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +53,7 @@ func seedExistingPolicies(t *testing.T, applier *WindowsApplier) {
 		t.Fatal(err)
 	}
 	listKey.Close()
-	policyKey, _, err := registry.CreateKey(registry.CURRENT_USER, applier.chromeKey, registry.WRITE)
+	policyKey, _, err := registry.CreateKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserChrome], registry.WRITE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +163,7 @@ func TestWindowsApplierRepairsDrift(t *testing.T) {
 	if _, err := applier.Sync(true, []string{"poki.com"}); err != nil {
 		t.Fatal(err)
 	}
-	key, err := registry.OpenKey(registry.CURRENT_USER, applier.chromeKey+`\URLBlocklist`, registry.SET_VALUE)
+	key, err := registry.OpenKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserChrome]+`\URLBlocklist`, registry.SET_VALUE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +230,7 @@ func TestWindowsApplierRestoreWithoutActiveSyncRemovesMarker(t *testing.T) {
 	}
 	// A fresh applier simulates uninstall after the in-memory manager is gone;
 	// it must use the persisted manifest.
-	fresh := newWindowsApplier(registry.CURRENT_USER, applier.chromeKey, applier.edgeKey, applier.hostsPath, applier.stateDir)
+	fresh := newWindowsApplier(registry.CURRENT_USER, applier.policyKeys, applier.hostsPath, applier.stateDir)
 	fresh.browsersOverride = []string{"chrome", "edge"}
 	if err := fresh.Restore(); err != nil {
 		t.Fatal(err)
@@ -254,5 +262,65 @@ func TestWindowsApplierRestoresLFHostsExactly(t *testing.T) {
 	}
 	if string(restored) != original {
 		t.Fatalf("LF hosts was not restored exactly: %q want %q", restored, original)
+	}
+}
+
+func TestWindowsApplierFirefoxPolicyAndRestore(t *testing.T) {
+	applier := newTestApplier(t, "127.0.0.1 localhost\r\n")
+	applier.browsersOverride = []string{model.BrowserChrome, model.BrowserEdge, model.BrowserFirefox}
+	status, err := applier.Sync(true, []string{"poki.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.URLBlocklistApplied || !status.DoHDisabled {
+		t.Fatalf("status = %+v", status)
+	}
+	if !containsString(status.PolicyBrowsers, model.BrowserFirefox) {
+		t.Fatalf("Firefox was not applied: %+v", status.PolicyBrowsers)
+	}
+	if !containsString(status.RestartRequiredBrowsers, model.BrowserFirefox) {
+		t.Fatalf("Firefox restart note missing: %+v", status.RestartRequiredBrowsers)
+	}
+	values, err := readListValuesForKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserFirefox]+`\WebsiteFilter\Block`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, value := range values {
+		if value == "*://*.poki.com/*" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Firefox blocklist = %+v", values)
+	}
+	key, err := registry.OpenKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserFirefox], registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, _, err := key.GetIntegerValue("Enabled")
+	if err != nil || enabled != 0 {
+		t.Fatalf("Firefox DoH Enabled = %d/%v", enabled, err)
+	}
+	locked, _, err := key.GetIntegerValue("Locked")
+	key.Close()
+	if err != nil || locked != 1 {
+		t.Fatalf("Firefox DoH Locked = %d/%v", locked, err)
+	}
+
+	if err := applier.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if values, err := readListValuesForKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserFirefox]+`\WebsiteFilter\Block`); err == nil && len(values) > 0 {
+		t.Fatalf("Firefox blocklist was not removed: %+v", values)
+	}
+	if key, err := registry.OpenKey(registry.CURRENT_USER, applier.policyKeys[model.BrowserFirefox], registry.QUERY_VALUE); err == nil {
+		if _, _, err := key.GetIntegerValue("Enabled"); err == nil {
+			t.Fatal("Firefox Enabled value was not removed")
+		}
+		if _, _, err := key.GetIntegerValue("Locked"); err == nil {
+			t.Fatal("Firefox Locked value was not removed")
+		}
+		key.Close()
 	}
 }

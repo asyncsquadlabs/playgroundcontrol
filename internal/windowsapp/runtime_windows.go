@@ -112,7 +112,8 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 	})
 	aiWatcher := aiwatch.New(source, st, st, deepseek.NewClient(), st, st, engine, aiwatch.Options{})
 	browserManager := browsercontrol.NewManager(st, browsercontrol.NewWindowsApplier(dataDir()), st, browsercontrol.Options{})
-	browserWatcher := browserwatch.New(browserwatch.NewHistorySource(dataDir()), st, st, deepseek.NewClient(), st, browserManager, st, browserwatch.Options{})
+	historySource := browserwatch.NewHistorySource(dataDir())
+	browserWatcher := browserwatch.New(historySource, st, st, deepseek.NewClient(), st, browserManager, st, browserwatch.Options{})
 	if err := browserManager.Sync(); err != nil {
 		logger.Warningf("browser controls could not be synchronized: %v", err)
 	}
@@ -146,11 +147,13 @@ func startRuntime(logger *serviceLogger, report func(uint32)) (*runtimeApp, erro
 
 	reportPhase(startupPhaseListener)
 	httpAPI := server.New(server.Options{
-		Address:     fmt.Sprintf("0.0.0.0:%d", server.Port),
-		Version:     buildinfo.Version,
-		LaunchGuard: launchGuard,
-		AI:          aiWatcher,
-		Browser:     browserManager,
+		Address:        fmt.Sprintf("0.0.0.0:%d", server.Port),
+		Version:        buildinfo.Version,
+		LaunchGuard:    launchGuard,
+		AI:             aiWatcher,
+		Browser:        browserManager,
+		BrowserUsers:   historySource,
+		BrowserWatcher: browserWatcher,
 	}, st, authManager, engine)
 	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", server.Port))
 	if err != nil {

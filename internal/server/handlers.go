@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -234,6 +235,7 @@ func (s *Server) state(session auth.Session) stateResponse {
 	if s.browser != nil {
 		browserStatus = s.browser.Status()
 	}
+	browserStatus = s.enrichBrowserStatus(browserStatus, browserSettings)
 	blockedCount, reviewCount, allowedCount, countsErr := s.store.BrowserDomainCounts()
 	if countsErr != nil {
 		warnings = append(warnings, "Browser domain counts could not be read: "+countsErr.Error())
@@ -245,10 +247,20 @@ func (s *Server) state(session auth.Session) stateResponse {
 		warnings = append(warnings, "Browser controls are reporting an error: "+browserStatus.LastError)
 	}
 	if browserSettings.Enabled && len(browserStatus.Browsers) == 0 {
-		warnings = append(warnings, "Browser monitoring is enabled, but Chrome or Edge was not detected on this PC.")
+		warnings = append(warnings, "Browser monitoring is enabled, but no supported browser was detected on this PC.")
+	}
+	if browserSettings.ActivityLogging && browserStatus.MonitoredUsers == 0 {
+		warnings = append(warnings, "Browser activity logging is enabled, but no Windows account is selected. No activity is being recorded.")
+	}
+	if browserSettings.ActivityLogging && browserStatus.MonitoredUsers > 0 && browserStatus.ActivityBackfillPending {
+		warnings = append(warnings, "Browser activity history is being imported for the selected Windows accounts.")
+	}
+	if browserStatus.UnacknowledgedHistoryAlerts > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d browser history-clear alert(s) need review.", browserStatus.UnacknowledgedHistoryAlerts))
 	}
 	if browserSettings.Enabled && !cfg.PlayAllowed && blockedCount > 0 &&
-		(!browserStatus.URLBlocklistApplied || !browserStatus.HostsApplied) {
+		(!browserStatus.URLBlocklistApplied || !browserStatus.HostsApplied) &&
+		!(browserStatus.HostsApplied && len(browserStatus.PolicyBrowsers) == 0 && len(browserStatus.FallbackOnlyBrowsers) > 0) {
 		warnings = append(warnings, "Browser game blocking is not fully active. The service will retry; check the browser panel for details.")
 	}
 	if (!browserSettings.Enabled || cfg.PlayAllowed) &&

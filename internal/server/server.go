@@ -64,29 +64,43 @@ type BrowserMonitor interface {
 	Status() model.BrowserStatus
 }
 
+// BrowserUserSource enumerates local Windows profiles for the journal picker.
+type BrowserUserSource interface {
+	BrowserUsers(context.Context) ([]model.BrowserUser, error)
+}
+
+// BrowserWatcher accepts wake requests for the activity journal.
+type BrowserWatcher interface {
+	Wake()
+}
+
 // Options configures a Server.
 type Options struct {
-	Address      string
-	Version      string
-	AllowedHosts []string
-	Now          func() time.Time
-	LaunchGuard  LaunchGuard
-	AI           AIMonitor
-	Browser      BrowserMonitor
+	Address        string
+	Version        string
+	AllowedHosts   []string
+	Now            func() time.Time
+	LaunchGuard    LaunchGuard
+	AI             AIMonitor
+	Browser        BrowserMonitor
+	BrowserUsers   BrowserUserSource
+	BrowserWatcher BrowserWatcher
 }
 
 // Server holds process-wide dependencies. It is safe to construct once and
 // serve concurrently.
 type Server struct {
-	store       *store.Store
-	auth        *auth.Manager
-	enforcer    Enforcer
-	launchGuard LaunchGuard
-	ai          AIMonitor
-	browser     BrowserMonitor
-	version     string
-	address     string
-	now         func() time.Time
+	store        *store.Store
+	auth         *auth.Manager
+	enforcer     Enforcer
+	launchGuard  LaunchGuard
+	ai           AIMonitor
+	browser      BrowserMonitor
+	browserUsers BrowserUserSource
+	browserWatch BrowserWatcher
+	version      string
+	address      string
+	now          func() time.Time
 
 	handler      http.Handler
 	allowedHosts map[string]struct{}
@@ -115,6 +129,8 @@ func New(options Options, st *store.Store, authManager *auth.Manager, enforcer E
 		launchGuard:  options.LaunchGuard,
 		ai:           options.AI,
 		browser:      options.Browser,
+		browserUsers: options.BrowserUsers,
+		browserWatch: options.BrowserWatcher,
 		version:      options.Version,
 		address:      options.Address,
 		now:          options.Now,
@@ -161,6 +177,11 @@ func (s *Server) buildHandler() http.Handler {
 	mux.Handle("POST /api/v1/browser/domains", s.withMutation(s.handleAddBrowserDomain))
 	mux.Handle("PUT /api/v1/browser/domains/{id}", s.withMutation(s.handleSetBrowserDomainStatus))
 	mux.Handle("GET /api/v1/browser/detections", s.withAuth(s.handleBrowserDetections))
+	mux.Handle("GET /api/v1/browser/users", s.withAuth(s.handleBrowserUsers))
+	mux.Handle("PUT /api/v1/browser/users", s.withMutation(s.handleSetBrowserUsers))
+	mux.Handle("GET /api/v1/browser/activity", s.withAuth(s.handleBrowserActivity))
+	mux.Handle("GET /api/v1/browser/activity/filters", s.withAuth(s.handleBrowserActivityFilters))
+	mux.Handle("POST /api/v1/browser/activity/alerts/{id}/acknowledge", s.withMutation(s.handleAcknowledgeBrowserHistoryAlert))
 	mux.Handle("GET /api/v1/strange-activity", s.withAuth(s.handleStrangeActivity))
 	mux.Handle("POST /api/v1/strange-activity/{id}/block", s.withMutation(s.handleBlockStrangeActivity))
 	mux.Handle("DELETE /api/v1/strange-activity/{id}", s.withMutation(s.handleIgnoreStrangeActivity))

@@ -25,12 +25,27 @@ import (
 )
 
 const (
-	chromePolicyKey = `SOFTWARE\Policies\Google\Chrome`
-	edgePolicyKey   = `SOFTWARE\Policies\Microsoft\Edge`
-	markerStart     = "# >>> Playground Control blocked browser domains >>>"
-	markerEnd       = "# <<< Playground Control blocked browser domains <<<"
-	manifestVersion = 1
+	chromePolicyKey   = `SOFTWARE\Policies\Google\Chrome`
+	edgePolicyKey     = `SOFTWARE\Policies\Microsoft\Edge`
+	bravePolicyKey    = `SOFTWARE\Policies\BraveSoftware\Brave`
+	vivaldiPolicyKey  = `SOFTWARE\Policies\Vivaldi`
+	chromiumPolicyKey = `SOFTWARE\Policies\Chromium`
+	firefoxPolicyKey  = `SOFTWARE\Policies\Mozilla\Firefox`
+	markerStart       = "# >>> Playground Control blocked browser domains >>>"
+	markerEnd         = "# <<< Playground Control blocked browser domains <<<"
+	manifestVersion   = 2
 )
+
+func policyBrowserList() []string {
+	return []string{
+		model.BrowserChrome, model.BrowserEdge, model.BrowserBrave,
+		model.BrowserVivaldi, model.BrowserChromium, model.BrowserFirefox,
+	}
+}
+
+func fallbackBrowserList() []string {
+	return []string{model.BrowserOpera}
+}
 
 type savedValue struct {
 	Existed bool   `json:"existed"`
@@ -40,23 +55,24 @@ type savedValue struct {
 }
 
 type enforcementManifest struct {
-	Version          int                              `json:"version"`
-	URLBlocklist     map[string]map[string]string     `json:"urlBlocklist,omitempty"`
-	DoHOriginal      map[string]map[string]savedValue `json:"dohOriginal,omitempty"`
-	HostsBackup      string                           `json:"hostsBackup,omitempty"`
-	HostsOriginalSHA string                           `json:"hostsOriginalSha256,omitempty"`
+	Version             int                              `json:"version"`
+	URLBlocklist        map[string]map[string]string     `json:"urlBlocklist,omitempty"`
+	DoHOriginal         map[string]map[string]savedValue `json:"dohOriginal,omitempty"`
+	FirefoxURLBlocklist map[string]string                `json:"firefoxUrlBlocklist,omitempty"`
+	FirefoxDoHOriginal  map[string]savedValue            `json:"firefoxDohOriginal,omitempty"`
+	HostsBackup         string                           `json:"hostsBackup,omitempty"`
+	HostsOriginalSHA    string                           `json:"hostsOriginalSha256,omitempty"`
 }
 
 // WindowsApplier manages Chrome/Edge URLBlocklist, DoH policies, and the hosts
 // file. Paths are injectable for tests.
 type WindowsApplier struct {
-	root      registry.Key
-	chromeKey string
-	edgeKey   string
-	hostsPath string
-	stateDir  string
-	backupDir string
-	manifest  string
+	root       registry.Key
+	policyKeys map[string]string
+	hostsPath  string
+	stateDir   string
+	backupDir  string
+	manifest   string
 
 	browsersOverride []string
 
@@ -66,8 +82,14 @@ type WindowsApplier struct {
 
 // NewWindowsApplier builds the production machine-wide applier.
 func NewWindowsApplier(dataDir string) *WindowsApplier {
-	return newWindowsApplier(registry.LOCAL_MACHINE, chromePolicyKey, edgePolicyKey,
-		defaultHostsPath(), dataDir)
+	return newWindowsApplier(registry.LOCAL_MACHINE, map[string]string{
+		model.BrowserChrome:   chromePolicyKey,
+		model.BrowserEdge:     edgePolicyKey,
+		model.BrowserBrave:    bravePolicyKey,
+		model.BrowserVivaldi:  vivaldiPolicyKey,
+		model.BrowserChromium: chromiumPolicyKey,
+		model.BrowserFirefox:  firefoxPolicyKey,
+	}, defaultHostsPath(), dataDir)
 }
 
 func defaultHostsPath() string {
@@ -78,16 +100,20 @@ func defaultHostsPath() string {
 	return filepath.Join(root, "System32", "drivers", "etc", "hosts")
 }
 
-func newWindowsApplier(root registry.Key, chromeKey, edgeKey, hostsPath, dataDir string) *WindowsApplier {
+func newWindowsApplier(root registry.Key, policyKeys map[string]string, hostsPath, dataDir string) *WindowsApplier {
 	return &WindowsApplier{
-		root:      root,
-		chromeKey: chromeKey,
-		edgeKey:   edgeKey,
-		hostsPath: hostsPath,
-		stateDir:  dataDir,
-		backupDir: filepath.Join(dataDir, "browser-backup"),
-		manifest:  filepath.Join(dataDir, "browser-enforcement.json"),
-		status:    model.BrowserStatus{Browsers: []string{}},
+		root:       root,
+		policyKeys: policyKeys,
+		hostsPath:  hostsPath,
+		stateDir:   dataDir,
+		backupDir:  filepath.Join(dataDir, "browser-backup"),
+		manifest:   filepath.Join(dataDir, "browser-enforcement.json"),
+		status: model.BrowserStatus{
+			Browsers:                []string{},
+			PolicyBrowsers:          []string{},
+			FallbackOnlyBrowsers:    []string{},
+			RestartRequiredBrowsers: []string{},
+		},
 	}
 }
 
@@ -116,12 +142,12 @@ func (a *WindowsApplier) Sync(active bool, domains []string) (model.BrowserStatu
 	browsers := a.detectBrowsers()
 	drift := a.detectDrift(active, domains, browsers, manifest)
 
-	for _, browser := range []string{"chrome", "edge"} {
+	for _, browser := range policyBrowserList() {
 		var policyErr error
 		if active && containsString(browsers, browser) {
-			policyErr = a.applyPolicy(browser, domains, manifest)
+			policyErr = a.applyBrowserPolicy(browser, domains, manifest)
 		} else {
-			policyErr = a.clearPolicy(browser, manifest)
+			policyErr = a.clearBrowserPolicy(browser, manifest)
 		}
 		if policyErr != nil {
 			_ = a.saveManifest(manifest)
@@ -162,8 +188,8 @@ func (a *WindowsApplier) Restore() error {
 	}
 	manifest.URLBlocklist = ensureBrowserMap(manifest.URLBlocklist)
 	manifest.DoHOriginal = ensureSavedMap(manifest.DoHOriginal)
-	for _, browser := range []string{"chrome", "edge"} {
-		if err := a.clearPolicy(browser, manifest); err != nil {
+	for _, browser := range policyBrowserList() {
+		if err := a.clearBrowserPolicy(browser, manifest); err != nil {
 			_ = a.saveManifest(manifest)
 			return fmt.Errorf("restore %s browser policy: %w", browser, err)
 		}
@@ -187,22 +213,70 @@ func (a *WindowsApplier) Status() model.BrowserStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	status := a.status
+	status.Browsers = copyStrings(status.Browsers)
+	status.PolicyBrowsers = copyStrings(status.PolicyBrowsers)
+	status.FallbackOnlyBrowsers = copyStrings(status.FallbackOnlyBrowsers)
+	status.RestartRequiredBrowsers = copyStrings(status.RestartRequiredBrowsers)
 	if status.Browsers == nil {
 		status.Browsers = a.detectBrowsers()
-	} else {
-		browsers := make([]string, len(status.Browsers))
-		copy(browsers, status.Browsers)
-		status.Browsers = browsers
+	}
+	if status.PolicyBrowsers == nil {
+		status.PolicyBrowsers = []string{}
+	}
+	if status.FallbackOnlyBrowsers == nil {
+		status.FallbackOnlyBrowsers = []string{}
+	}
+	if status.RestartRequiredBrowsers == nil {
+		status.RestartRequiredBrowsers = []string{}
 	}
 	return status
+}
+
+func copyStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func (a *WindowsApplier) failure(err error) (model.BrowserStatus, error) {
 	status := a.status
 	status.Browsers = a.detectBrowsers()
+	status.PolicyBrowsers = append([]string(nil), a.status.PolicyBrowsers...)
+	status.FallbackOnlyBrowsers = fallbackInstalledBrowsers(status.Browsers)
+	status.RestartRequiredBrowsers = []string{}
+	if containsString(status.Browsers, model.BrowserFirefox) {
+		status.RestartRequiredBrowsers = []string{model.BrowserFirefox}
+	}
 	status.LastError = err.Error()
 	a.status = status
 	return status, err
+}
+
+func fallbackInstalledBrowsers(browsers []string) []string {
+	out := make([]string, 0, len(fallbackBrowserList()))
+	for _, browser := range fallbackBrowserList() {
+		if containsString(browsers, browser) {
+			out = append(out, browser)
+		}
+	}
+	return out
+}
+
+func (a *WindowsApplier) applyBrowserPolicy(browser string, domains []string, manifest *enforcementManifest) error {
+	if browser == model.BrowserFirefox {
+		return a.applyFirefoxPolicy(domains, manifest)
+	}
+	return a.applyPolicy(browser, domains, manifest)
+}
+
+func (a *WindowsApplier) clearBrowserPolicy(browser string, manifest *enforcementManifest) error {
+	if browser == model.BrowserFirefox {
+		return a.clearFirefoxPolicy(manifest)
+	}
+	return a.clearPolicy(browser, manifest)
 }
 
 func (a *WindowsApplier) applyPolicy(browser string, domains []string, manifest *enforcementManifest) error {
@@ -268,6 +342,188 @@ func (a *WindowsApplier) clearPolicy(browser string, manifest *enforcementManife
 	delete(manifest.URLBlocklist, browser)
 
 	return a.restoreDoHPolicy(browser, manifest)
+}
+
+func firefoxPattern(domain string) string {
+	return "*://*." + domain + "/*"
+}
+
+func (a *WindowsApplier) applyFirefoxPolicy(domains []string, manifest *enforcementManifest) error {
+	policyKey := a.policyKeys[model.BrowserFirefox]
+	listPath := policyKey + `\WebsiteFilter\Block`
+	key, _, err := registry.CreateKey(a.root, listPath, registry.QUERY_VALUE|registry.SET_VALUE|registry.CREATE_SUB_KEY)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	existing, err := readStringValues(key)
+	if err != nil {
+		return err
+	}
+	previous := manifest.FirefoxURLBlocklist
+	if firefoxDomainsMatch(previous, existing, domains) {
+		return a.applyFirefoxDoH(manifest)
+	}
+	written := make(map[string]string)
+	for name, value := range previous {
+		if current, ok := existing[name]; ok && current == value {
+			if err := key.DeleteValue(name); err != nil && !errors.Is(err, registry.ErrNotExist) {
+				return err
+			}
+			delete(existing, name)
+		}
+	}
+	next := nextListIndex(existing)
+	for i, domain := range domains {
+		name := strconv.Itoa(next + i)
+		pattern := firefoxPattern(domain)
+		if err := key.SetStringValue(name, pattern); err != nil {
+			return err
+		}
+		written[name] = pattern
+	}
+	manifest.FirefoxURLBlocklist = written
+	return a.applyFirefoxDoH(manifest)
+}
+
+func (a *WindowsApplier) clearFirefoxPolicy(manifest *enforcementManifest) error {
+	policyKey := a.policyKeys[model.BrowserFirefox]
+	key, err := registry.OpenKey(a.root, policyKey+`\WebsiteFilter\Block`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err == nil {
+		for name, value := range manifest.FirefoxURLBlocklist {
+			current, _, readErr := key.GetStringValue(name)
+			if readErr == nil && current == value {
+				if err := key.DeleteValue(name); err != nil && !errors.Is(err, registry.ErrNotExist) {
+					key.Close()
+					return err
+				}
+			}
+		}
+		key.Close()
+	} else if !errors.Is(err, registry.ErrNotExist) {
+		return err
+	}
+	manifest.FirefoxURLBlocklist = nil
+	return a.restoreFirefoxDoH(manifest)
+}
+
+func (a *WindowsApplier) applyFirefoxDoH(manifest *enforcementManifest) error {
+	key, _, err := registry.CreateKey(a.root, a.policyKeys[model.BrowserFirefox], registry.QUERY_VALUE|registry.SET_VALUE|registry.CREATE_SUB_KEY)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+	original := manifest.FirefoxDoHOriginal
+	if original == nil {
+		original = make(map[string]savedValue)
+	}
+	for _, name := range []string{"Enabled", "Locked"} {
+		if _, saved := original[name]; saved {
+			continue
+		}
+		current, err := readSavedValue(key, name)
+		if err != nil {
+			return err
+		}
+		original[name] = current
+	}
+	manifest.FirefoxDoHOriginal = original
+	if enabled, _, err := key.GetIntegerValue("Enabled"); err != nil || enabled != 0 {
+		if err := key.SetDWordValue("Enabled", 0); err != nil {
+			return err
+		}
+	}
+	if locked, _, err := key.GetIntegerValue("Locked"); err != nil || locked != 1 {
+		if err := key.SetDWordValue("Locked", 1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *WindowsApplier) restoreFirefoxDoH(manifest *enforcementManifest) error {
+	original := manifest.FirefoxDoHOriginal
+	if len(original) == 0 {
+		return nil
+	}
+	key, err := registry.OpenKey(a.root, a.policyKeys[model.BrowserFirefox], registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			manifest.FirefoxDoHOriginal = nil
+			return nil
+		}
+		return err
+	}
+	defer key.Close()
+	for name, saved := range original {
+		current, readErr := readSavedValue(key, name)
+		if readErr != nil {
+			continue
+		}
+		if current.Existed {
+			if name == "Enabled" && (current.DWORD != 0 || current.Type != registry.DWORD) {
+				continue
+			}
+			if name == "Locked" && (current.DWORD != 1 || current.Type != registry.DWORD) {
+				continue
+			}
+		}
+		switch {
+		case !saved.Existed:
+			if err := key.DeleteValue(name); err != nil && !errors.Is(err, registry.ErrNotExist) {
+				return err
+			}
+		case saved.Type == registry.DWORD:
+			if err := key.SetDWordValue(name, saved.DWORD); err != nil {
+				return err
+			}
+		default:
+			if err := key.SetStringValue(name, saved.String); err != nil {
+				return err
+			}
+		}
+	}
+	manifest.FirefoxDoHOriginal = nil
+	return nil
+}
+
+func firefoxDomainsMatch(written, existing map[string]string, domains []string) bool {
+	if len(written) != len(domains) {
+		return false
+	}
+	desired := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		desired[firefoxPattern(domain)] = struct{}{}
+	}
+	for name, value := range written {
+		if existing[name] != value {
+			return false
+		}
+		if _, ok := desired[value]; !ok {
+			return false
+		}
+		delete(desired, value)
+	}
+	return len(desired) == 0
+}
+
+func manifestCoversFirefox(values, written map[string]string, domains []string) bool {
+	present := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		present[value] = struct{}{}
+	}
+	for _, domain := range domains {
+		if _, ok := present[firefoxPattern(domain)]; !ok {
+			return false
+		}
+	}
+	for name, value := range written {
+		if values[name] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *WindowsApplier) applyDoHPolicy(browser string, manifest *enforcementManifest) error {
@@ -365,51 +621,47 @@ func (a *WindowsApplier) detectDrift(active bool, domains, browsers []string, ma
 		if err != nil || !hostsContainsDomains(string(hosts), domains) {
 			return true
 		}
-		for _, browser := range browsers {
-			written := manifest.URLBlocklist[browser]
-			if len(written) == 0 {
+		for _, browser := range policyBrowserList() {
+			if !containsString(browsers, browser) {
 				continue
 			}
-			key, err := registry.OpenKey(a.root, a.policyKeyFor(browser)+`\URLBlocklist`, registry.QUERY_VALUE)
+			if browser == model.BrowserFirefox {
+				values, err := readListValuesForKey(a.root, a.policyKeys[browser]+`\WebsiteFilter\Block`)
+				if err != nil || !manifestCoversFirefox(values, manifest.FirefoxURLBlocklist, domains) {
+					return true
+				}
+				if !firefoxDoHApplied(a.root, a.policyKeys[browser]) {
+					return true
+				}
+				continue
+			}
+			key, err := registry.OpenKey(a.root, a.policyKeys[browser]+`\URLBlocklist`, registry.QUERY_VALUE)
 			if err != nil {
 				return true
 			}
 			values, readErr := readStringValues(key)
 			key.Close()
-			if readErr != nil {
+			if readErr != nil || !manifestCoversDomains(values, manifest.URLBlocklist[browser], domains) {
 				return true
 			}
-			for name, value := range written {
-				if values[name] != value {
-					return true
-				}
-			}
-			for _, name := range []string{"DnsOverHttpsMode", "BuiltInDnsClientEnabled"} {
-				policy, err := registry.OpenKey(a.root, a.policyKeyFor(browser), registry.QUERY_VALUE)
-				if err != nil {
-					return true
-				}
-				current, readErr := readSavedValue(policy, name)
-				policy.Close()
-				if readErr != nil {
-					return true
-				}
-				if name == "DnsOverHttpsMode" && current.String != "off" {
-					return true
-				}
-				if name == "BuiltInDnsClientEnabled" && current.DWORD != 0 {
-					return true
-				}
+			if !chromiumDoHApplied(a.root, a.policyKeys[browser]) {
+				return true
 			}
 		}
 		return false
 	}
 
-	for _, browser := range []string{"chrome", "edge"} {
+	for _, browser := range policyBrowserList() {
+		if browser == model.BrowserFirefox {
+			if len(manifest.FirefoxURLBlocklist) > 0 || len(manifest.FirefoxDoHOriginal) > 0 {
+				return true
+			}
+			continue
+		}
 		if len(manifest.URLBlocklist[browser]) == 0 && len(manifest.DoHOriginal[browser]) == 0 {
 			continue
 		}
-		key, err := registry.OpenKey(a.root, a.policyKeyFor(browser)+`\URLBlocklist`, registry.QUERY_VALUE)
+		key, err := registry.OpenKey(a.root, a.policyKeys[browser]+`\URLBlocklist`, registry.QUERY_VALUE)
 		if err == nil {
 			values, readErr := readStringValues(key)
 			key.Close()
@@ -432,43 +684,98 @@ func (a *WindowsApplier) detectDrift(active bool, domains, browsers []string, ma
 	return false
 }
 
+func readListValuesForKey(root registry.Key, path string) (map[string]string, error) {
+	key, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
+	if err != nil {
+		return nil, err
+	}
+	defer key.Close()
+	return readStringValues(key)
+}
+
+func chromiumDoHApplied(root registry.Key, policyKey string) bool {
+	key, err := registry.OpenKey(root, policyKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	mode, _, err := key.GetStringValue("DnsOverHttpsMode")
+	if err != nil || mode != "off" {
+		return false
+	}
+	enabled, _, err := key.GetIntegerValue("BuiltInDnsClientEnabled")
+	return err == nil && enabled == 0
+}
+
+func firefoxDoHApplied(root registry.Key, policyKey string) bool {
+	key, err := registry.OpenKey(root, policyKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	enabled, _, err := key.GetIntegerValue("Enabled")
+	if err != nil || enabled != 0 {
+		return false
+	}
+	locked, _, err := key.GetIntegerValue("Locked")
+	return err == nil && locked == 1
+}
+
 func (a *WindowsApplier) computeStatus(active bool, domains, browsers []string, manifest *enforcementManifest) model.BrowserStatus {
 	status := model.BrowserStatus{
-		MonitoringEnabled: true,
-		Browsers:          browsers,
-		LastAppliedAt:     time.Now().UTC(),
+		MonitoringEnabled:       true,
+		Browsers:                copyStrings(browsers),
+		PolicyBrowsers:          []string{},
+		FallbackOnlyBrowsers:    fallbackInstalledBrowsers(browsers),
+		RestartRequiredBrowsers: []string{},
+		LastAppliedAt:           time.Now().UTC(),
+	}
+	if status.Browsers == nil {
+		status.Browsers = []string{}
 	}
 	if !active || len(domains) == 0 {
 		return status
 	}
-	hosts, err := os.ReadFile(a.hostsPath) // #nosec G304 -- fixed hosts path or injected test path.
-	status.HostsApplied = err == nil && hostsContainsDomains(string(hosts), domains)
-	status.DoHDisabled = len(browsers) > 0
-	status.URLBlocklistApplied = len(browsers) > 0
-	for _, browser := range browsers {
-		key, err := registry.OpenKey(a.root, a.policyKeyFor(browser)+`\URLBlocklist`, registry.QUERY_VALUE)
-		if err != nil {
-			status.URLBlocklistApplied = false
-		} else {
-			values, readErr := readStringValues(key)
-			key.Close()
-			if readErr != nil || !manifestCoversDomains(values, manifest.URLBlocklist[browser], domains) {
-				status.URLBlocklistApplied = false
-			}
+	if hosts, err := os.ReadFile(a.hostsPath); err == nil { // #nosec G304 -- fixed hosts path or injected test path.
+		status.HostsApplied = hostsContainsDomains(string(hosts), domains)
+	}
+	policyCapable := make([]string, 0)
+	for _, browser := range policyBrowserList() {
+		if containsString(browsers, browser) {
+			policyCapable = append(policyCapable, browser)
 		}
-		for _, name := range []string{"DnsOverHttpsMode", "BuiltInDnsClientEnabled"} {
-			policy, err := registry.OpenKey(a.root, a.policyKeyFor(browser), registry.QUERY_VALUE)
-			if err != nil {
-				status.DoHDisabled = false
-				continue
+	}
+	if len(policyCapable) == 0 {
+		return status
+	}
+	status.URLBlocklistApplied = true
+	status.DoHDisabled = true
+	for _, browser := range policyCapable {
+		applied := false
+		doh := false
+		if browser == model.BrowserFirefox {
+			values, err := readListValuesForKey(a.root, a.policyKeys[browser]+`\WebsiteFilter\Block`)
+			applied = err == nil && manifestCoversFirefox(values, manifest.FirefoxURLBlocklist, domains)
+			doh = firefoxDoHApplied(a.root, a.policyKeys[browser])
+			if !containsString(status.RestartRequiredBrowsers, browser) {
+				status.RestartRequiredBrowsers = append(status.RestartRequiredBrowsers, browser)
 			}
-			current, readErr := readSavedValue(policy, name)
-			policy.Close()
-			if readErr != nil ||
-				(name == "DnsOverHttpsMode" && current.String != "off") ||
-				(name == "BuiltInDnsClientEnabled" && current.DWORD != 0) {
-				status.DoHDisabled = false
+		} else {
+			key, err := registry.OpenKey(a.root, a.policyKeys[browser]+`\URLBlocklist`, registry.QUERY_VALUE)
+			if err == nil {
+				values, readErr := readStringValues(key)
+				key.Close()
+				applied = readErr == nil && manifestCoversDomains(values, manifest.URLBlocklist[browser], domains)
 			}
+			doh = chromiumDoHApplied(a.root, a.policyKeys[browser])
+		}
+		if applied {
+			status.PolicyBrowsers = append(status.PolicyBrowsers, browser)
+		} else {
+			status.URLBlocklistApplied = false
+		}
+		if !doh {
+			status.DoHDisabled = false
 		}
 	}
 	return status
@@ -592,7 +899,7 @@ func (a *WindowsApplier) loadManifest() (*enforcementManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("decode browser enforcement backup: %w", err)
 	}
-	if manifest.Version == 0 {
+	if manifest.Version < manifestVersion {
 		manifest.Version = manifestVersion
 	}
 	return &manifest, nil
@@ -628,22 +935,23 @@ func (a *WindowsApplier) saveManifest(manifest *enforcementManifest) error {
 }
 
 func (a *WindowsApplier) policyKeyFor(browser string) string {
-	if browser == "edge" {
-		return a.edgeKey
-	}
-	return a.chromeKey
+	return a.policyKeys[browser]
 }
 
 func (a *WindowsApplier) detectBrowsers() []string {
 	if a.browsersOverride != nil {
 		return append([]string(nil), a.browsersOverride...)
 	}
-	var out []string
-	if browserExecutableExists("chrome") {
-		out = append(out, "chrome")
+	order := []string{
+		model.BrowserChrome, model.BrowserEdge, model.BrowserBrave,
+		model.BrowserVivaldi, model.BrowserChromium, model.BrowserFirefox,
+		model.BrowserOpera,
 	}
-	if browserExecutableExists("edge") {
-		out = append(out, "edge")
+	out := make([]string, 0, len(order))
+	for _, browser := range order {
+		if browserExecutableExists(browser) {
+			out = append(out, browser)
+		}
 	}
 	return out
 }
@@ -657,21 +965,57 @@ func browserExecutableExists(browser string) bool {
 	if programFilesX86 == "" {
 		programFilesX86 = `C:\Program Files (x86)`
 	}
+	localAppData := os.Getenv("LOCALAPPDATA")
 	var candidates []string
 	switch browser {
-	case "chrome":
+	case model.BrowserChrome:
 		candidates = []string{
 			filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
 			filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+			filepath.Join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
 		}
 		matches, _ := filepath.Glob(`C:\Users\*\AppData\Local\Google\Chrome\Application\chrome.exe`)
 		candidates = append(candidates, matches...)
-	case "edge":
+	case model.BrowserEdge:
 		candidates = []string{
 			filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
 			filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+			filepath.Join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
 		}
 		matches, _ := filepath.Glob(`C:\Users\*\AppData\Local\Microsoft\Edge\Application\msedge.exe`)
+		candidates = append(candidates, matches...)
+	case model.BrowserBrave:
+		candidates = []string{
+			filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+			filepath.Join(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+			filepath.Join(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+		}
+	case model.BrowserVivaldi:
+		candidates = []string{
+			filepath.Join(programFiles, "Vivaldi", "Application", "vivaldi.exe"),
+			filepath.Join(programFilesX86, "Vivaldi", "Application", "vivaldi.exe"),
+			filepath.Join(localAppData, "Vivaldi", "Application", "vivaldi.exe"),
+		}
+	case model.BrowserChromium:
+		candidates = []string{
+			filepath.Join(programFiles, "Chromium", "Application", "chrome.exe"),
+			filepath.Join(programFilesX86, "Chromium", "Application", "chrome.exe"),
+			filepath.Join(localAppData, "Chromium", "Application", "chrome.exe"),
+		}
+	case model.BrowserFirefox:
+		candidates = []string{
+			filepath.Join(programFiles, "Mozilla Firefox", "firefox.exe"),
+			filepath.Join(programFilesX86, "Mozilla Firefox", "firefox.exe"),
+			filepath.Join(localAppData, "Mozilla Firefox", "firefox.exe"),
+		}
+	case model.BrowserOpera:
+		candidates = []string{
+			filepath.Join(localAppData, "Programs", "Opera", "opera.exe"),
+			filepath.Join(programFiles, "Opera", "opera.exe"),
+			filepath.Join(programFilesX86, "Opera", "opera.exe"),
+			filepath.Join(localAppData, "Programs", "Opera", "launcher.exe"),
+		}
+		matches, _ := filepath.Glob(filepath.Join(localAppData, "Programs", "Opera", "*", "opera.exe"))
 		candidates = append(candidates, matches...)
 	}
 	for _, candidate := range candidates {

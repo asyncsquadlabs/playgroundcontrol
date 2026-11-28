@@ -43,10 +43,13 @@ type Store struct {
 	aiKey      string
 	loadNotice string
 
-	auditMu   sync.Mutex
-	strangeMu sync.Mutex
-	browserMu sync.Mutex
-	backupMu  sync.Mutex
+	auditMu    sync.Mutex
+	strangeMu  sync.Mutex
+	browserMu  sync.Mutex
+	activityMu sync.Mutex
+	backupMu   sync.Mutex
+
+	activityBackupAt time.Time
 
 	closeOnce sync.Once
 	closeErr  error

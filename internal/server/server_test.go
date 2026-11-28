@@ -111,17 +111,27 @@ func (f *fakeAI) counts() (tests, wakes int) {
 	return f.testCalls, f.wakeCount
 }
 
+type fakeBrowserUsers struct {
+	users []model.BrowserUser
+	err   error
+}
+
+func (f *fakeBrowserUsers) BrowserUsers(context.Context) ([]model.BrowserUser, error) {
+	return append([]model.BrowserUser(nil), f.users...), f.err
+}
+
 type testApp struct {
-	server   *Server
-	http     *httptest.Server
-	client   *http.Client
-	auth     *auth.Manager
-	store    *store.Store
-	enforcer *fakeEnforcer
-	guard    *fakeLaunchGuard
-	ai       *fakeAI
-	browser  *fakeBrowser
-	dataDir  string
+	server       *Server
+	http         *httptest.Server
+	client       *http.Client
+	auth         *auth.Manager
+	store        *store.Store
+	enforcer     *fakeEnforcer
+	guard        *fakeLaunchGuard
+	ai           *fakeAI
+	browser      *fakeBrowser
+	browserUsers *fakeBrowserUsers
+	dataDir      string
 }
 
 func newTestApp(t *testing.T, configure bool) *testApp {
@@ -155,12 +165,16 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 	guard := &fakeLaunchGuard{blocked: true}
 	ai := &fakeAI{latency: 25 * time.Millisecond}
 	browser := &fakeBrowser{status: model.BrowserStatus{Browsers: []string{"chrome"}}}
+	browserUsers := &fakeBrowserUsers{users: []model.BrowserUser{{
+		SID: "S-1-5-21-1", UserName: `PC\kid`, Browsers: []string{"chrome"}, Available: true,
+	}}}
 	httpAPI := New(Options{
-		Address:     "127.0.0.1:8080",
-		Version:     "test-version",
-		LaunchGuard: guard,
-		AI:          ai,
-		Browser:     browser,
+		Address:      "127.0.0.1:8080",
+		Version:      "test-version",
+		LaunchGuard:  guard,
+		AI:           ai,
+		Browser:      browser,
+		BrowserUsers: browserUsers,
 	}, st, authManager, enforcer)
 	ts := httptest.NewServer(httpAPI.Handler())
 	t.Cleanup(ts.Close)
@@ -169,16 +183,17 @@ func newTestApp(t *testing.T, configure bool) *testApp {
 		t.Fatal(err)
 	}
 	return &testApp{
-		server:   httpAPI,
-		http:     ts,
-		client:   &http.Client{Jar: jar, Timeout: 5 * time.Second},
-		auth:     authManager,
-		store:    st,
-		enforcer: enforcer,
-		guard:    guard,
-		ai:       ai,
-		browser:  browser,
-		dataDir:  dir,
+		server:       httpAPI,
+		http:         ts,
+		client:       &http.Client{Jar: jar, Timeout: 5 * time.Second},
+		auth:         authManager,
+		store:        st,
+		enforcer:     enforcer,
+		guard:        guard,
+		ai:           ai,
+		browser:      browser,
+		browserUsers: browserUsers,
+		dataDir:      dir,
 	}
 }
 

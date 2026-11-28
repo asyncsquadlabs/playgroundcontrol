@@ -24,10 +24,10 @@ func TestBrowserSettingsDefaultsAndValidation(t *testing.T) {
 	if settings.Enabled || !settings.AutoBlock || settings.AIClassification {
 		t.Fatalf("unexpected defaults: %+v", settings)
 	}
-	if _, err := st.SaveBrowserSettings(true, true, true); !errors.Is(err, ErrAIKeyRequired) {
+	if _, err := st.SaveBrowserSettings(true, true, true, false); !errors.Is(err, ErrAIKeyRequired) {
 		t.Fatalf("SaveBrowserSettings with AI and no key = %v, want ErrAIKeyRequired", err)
 	}
-	updated, err := st.SaveBrowserSettings(true, false, false)
+	updated, err := st.SaveBrowserSettings(true, false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

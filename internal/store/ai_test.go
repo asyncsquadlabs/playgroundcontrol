@@ -97,7 +97,7 @@ func TestAISettingsAreSealedPersistedAndRedacted(t *testing.T) {
 	}
 }
 
-func TestStoreMigratesV1ToV3PreservingGames(t *testing.T) {
+func TestStoreMigratesV1ToV4PreservingGames(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, databaseFileName))
 	if err != nil {
@@ -133,8 +133,8 @@ func TestStoreMigratesV1ToV3PreservingGames(t *testing.T) {
 	if err := st.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("user_version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("user_version = %d, want 4", version)
 	}
 	if cfg := st.Config(); len(cfg.Games) != 1 || cfg.Games[0].Name != "Existing" ||
 		cfg.Games[0].Source != model.GameSourceParent || !cfg.PlayAllowed {

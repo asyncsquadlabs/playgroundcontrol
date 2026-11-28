@@ -13,7 +13,7 @@ Thanks for considering a contribution to Playground Control.
 
 Requirements:
 
-- Go 1.26.10 or newer. `go.mod` selects the patched toolchain when needed.
+- Go 1.26.11 or newer. `go.mod` selects the patched toolchain when needed.
 - Node.js 22+ for JavaScript syntax checks.
 - Windows 10/11 x64 or Wine for Windows-specific tests.
 

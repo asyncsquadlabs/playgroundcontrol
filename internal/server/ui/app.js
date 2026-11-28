@@ -54,7 +54,25 @@
     browserEnabled: document.getElementById("browserEnabled"),
     browserAutoBlock: document.getElementById("browserAutoBlock"),
     browserAI: document.getElementById("browserAI"),
+    browserActivity: document.getElementById("browserActivity"),
+    browserUserCount: document.getElementById("browserUserCount"),
+    browserUserList: document.getElementById("browserUserList"),
+    browserUserEmpty: document.getElementById("browserUserEmpty"),
+    browserUsersSave: document.getElementById("browserUsersSave"),
     browserControlState: document.getElementById("browserControlState"),
+    activityBadge: document.getElementById("activityBadge"),
+    activityStatusText: document.getElementById("activityStatusText"),
+    activityAlerts: document.getElementById("activityAlerts"),
+    activityFilterForm: document.getElementById("activityFilterForm"),
+    activityUser: document.getElementById("activityUser"),
+    activityBrowser: document.getElementById("activityBrowser"),
+    activityRange: document.getElementById("activityRange"),
+    activityQuery: document.getElementById("activityQuery"),
+    activityRemoved: document.getElementById("activityRemoved"),
+    activityRefresh: document.getElementById("activityRefresh"),
+    activityList: document.getElementById("activityList"),
+    activityEmpty: document.getElementById("activityEmpty"),
+    activityMore: document.getElementById("activityMore"),
     blockedDomainCount: document.getElementById("blockedDomainCount"),
     blockedDomainList: document.getElementById("blockedDomainList"),
     blockedDomainEmpty: document.getElementById("blockedDomainEmpty"),
@@ -88,12 +106,20 @@
   let eventPoll = null;
   let strangePoll = null;
   let browserPoll = null;
+  let activityPoll = null;
   let refreshing = false;
   let setupTokenFromURL = "";
   let strangeActivity = [];
   let browserDomains = { blocked: [], review: [], allowed: [] };
   let browserDetections = [];
   let browserFormDirty = false;
+  let browserUsers = [];
+  let activityItems = [];
+  let activityAlerts = [];
+  let activityHasMore = false;
+  let activityOffset = 0;
+  let activityLoading = false;
+  let activityLoadedMore = false;
 
   class APIError extends Error {
     constructor(message, status, code) {
@@ -208,6 +234,13 @@
         }
       }, 10000);
     }
+    if (!activityPoll) {
+      activityPoll = window.setInterval(() => {
+        if (!document.hidden && !views.dashboard.hidden && !activityLoadedMore) {
+          loadActivity(true, true);
+        }
+      }, 15000);
+    }
   }
 
   function stopDashboard() {
@@ -227,11 +260,21 @@
       window.clearInterval(browserPoll);
       browserPoll = null;
     }
+    if (activityPoll) {
+      window.clearInterval(activityPoll);
+      activityPoll = null;
+    }
     currentState = null;
     strangeActivity = [];
     browserDomains = { blocked: [], review: [], allowed: [] };
     browserDetections = [];
     browserFormDirty = false;
+    browserUsers = [];
+    activityItems = [];
+    activityAlerts = [];
+    activityHasMore = false;
+    activityOffset = 0;
+    activityLoadedMore = false;
   }
 
   async function init() {
@@ -282,7 +325,14 @@
     renderState(state);
     syncAIForm(state.ai || {});
     startPolling();
-    await Promise.all([loadEvents(), loadStrangeActivity(), loadBrowserData()]);
+    await Promise.all([
+      loadEvents(),
+      loadStrangeActivity(),
+      loadBrowserData(),
+      loadBrowserUsers(),
+      loadActivityFilters(),
+    ]);
+    await loadActivity(true, true);
   }
 
   function showLogin(message) {
@@ -423,6 +473,9 @@
     if (enabled && status.lastError) {
       badge = "Error";
       badgeClass = "error";
+    } else if (enabled && status.activityLoggingActive && !status.active) {
+      badge = "Journaling";
+      badgeClass = "on";
     } else if (enabled) {
       badge = status.active ? "Active" : "Idle";
       badgeClass = "on";
@@ -430,35 +483,55 @@
     ui.browserStatusBadge.textContent = badge;
     ui.browserStatusBadge.className = "ai-badge " + badgeClass;
     if (!enabled) {
-      ui.browserStatusText.textContent = "Chrome and Edge history is not monitored. No browser domain data leaves this PC.";
+      ui.browserStatusText.textContent = "Browser history is not monitored or journaled.";
     } else if (status.lastError) {
       ui.browserStatusText.textContent = "Browser monitoring is enabled but reporting an error.";
+    } else if (settings.activityLogging && Number(status.monitoredUsers) === 0) {
+      ui.browserStatusText.textContent = "Browser activity logging is on, but no Windows account is selected. Select at least one account below.";
     } else if (currentState && currentState.playAllowed) {
-      ui.browserStatusText.textContent = "Browser monitoring is enabled but idle while play is allowed. Policies and hosts entries are removed.";
+      ui.browserStatusText.textContent = settings.activityLogging
+        ? "The activity journal is recording selected accounts. Game blocking is idle while play is allowed."
+        : "Browser monitoring is enabled but idle while play is allowed. Policies and hosts entries are removed.";
     } else if (Number(browser.blockedCount) > 0 && (!status.urlBlocklistApplied || !status.hostsApplied)) {
       ui.browserStatusText.textContent = "Browser monitoring is watching, but controls are not fully active yet. The service retries automatically.";
     } else {
-      ui.browserStatusText.textContent = "Watching Chrome and Edge history while play is blocked. Detection is retrospective; a game tab may stay open until it reloads or navigates.";
+      ui.browserStatusText.textContent = settings.activityLogging
+        ? "Journaling selected accounts and watching running browsers for game domains while play is blocked. Detection is retrospective."
+        : "Watching running browsers for game domains while play is blocked. Detection is retrospective.";
     }
     if (!browserFormDirty) {
       ui.browserEnabled.checked = enabled;
       ui.browserAutoBlock.checked = settings.autoBlock !== false;
       ui.browserAI.checked = Boolean(settings.aiClassification);
+      ui.browserActivity.checked = Boolean(settings.activityLogging);
     }
+    ui.browserActivity.disabled = !ui.browserEnabled.checked;
     ui.blockedDomainCount.textContent = String(Number(browser.blockedCount) || 0);
     ui.reviewDomainCount.textContent = String(Number(browser.reviewCount) || 0);
     ui.allowedDomainCount.textContent = String(Number(browser.allowedCount) || 0);
     renderBrowserControlState(status, settings);
+    renderActivityStatus(status, settings);
   }
 
   function renderBrowserControlState(status, settings) {
     ui.browserControlState.replaceChildren();
     const chips = [];
     const browsers = status.browsers || [];
-    chips.push(browsers.length > 0 ? "Browsers: " + browsers.join(", ") : "No Chrome or Edge detected");
+    chips.push(browsers.length > 0 ? "Browsers: " + browsers.map(formatBrowserName).join(", ") : "No supported browser detected");
     chips.push(status.urlBlocklistApplied ? "URLBlocklist active" : "URLBlocklist inactive");
     chips.push(status.hostsApplied ? "Hosts active" : "Hosts inactive");
     chips.push(status.dohDisabled ? "DoH disabled" : "DoH unchanged");
+    const fallback = status.fallbackOnlyBrowsers || [];
+    if (fallback.length > 0) {
+      chips.push("Hosts only: " + fallback.map(formatBrowserName).join(", "));
+    }
+    const restart = status.restartRequiredBrowsers || [];
+    if (restart.length > 0 && settings.enabled) {
+      chips.push("Restart required: " + restart.map(formatBrowserName).join(", "));
+    }
+    if (settings.activityLogging) {
+      chips.push("Journal: " + (status.activityLoggingActive ? "recording" : "waiting for accounts"));
+    }
     if (settings.lastScanAt && !String(settings.lastScanAt).startsWith("0001-")) {
       chips.push("Last scan " + formatTimestamp(settings.lastScanAt));
     }
@@ -577,11 +650,327 @@
     }
   }
 
+  function formatBrowserName(value) {
+    const key = String(value || "").toLowerCase();
+    const names = {
+      chrome: "Chrome", edge: "Edge", firefox: "Firefox", brave: "Brave",
+      vivaldi: "Vivaldi", opera: "Opera", chromium: "Chromium",
+    };
+    return names[key] || value || "Browser";
+  }
+
+  function renderBrowserUsers() {
+    ui.browserUserList.replaceChildren();
+    const selected = browserUsers.filter((user) => user.selected).length;
+    ui.browserUserCount.textContent = selected + (selected === 1 ? " selected" : " selected");
+    ui.browserUserEmpty.hidden = browserUsers.length > 0;
+    for (const user of browserUsers) {
+      const row = document.createElement("div");
+      row.className = "list-item browser-user-item";
+      const label = document.createElement("label");
+      label.className = "checkbox-row";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = Boolean(user.selected);
+      checkbox.addEventListener("change", () => {
+        user.selected = checkbox.checked;
+        renderBrowserUsers();
+      });
+      const copy = document.createElement("span");
+      const title = document.createElement("span");
+      title.className = "item-title";
+      title.textContent = user.userName || user.sid || "Windows account";
+      const meta = document.createElement("span");
+      meta.className = "item-meta";
+      const browsers = user.browsers || [];
+      meta.textContent = browsers.length > 0
+        ? browsers.map(formatBrowserName).join(", ")
+        : "No supported browser profiles found";
+      copy.append(title, meta);
+      if (!user.available) {
+        const missing = document.createElement("span");
+        missing.className = "item-badge";
+        missing.textContent = "Profile not found";
+        copy.append(missing);
+      }
+      label.append(checkbox, copy);
+      row.append(label);
+      ui.browserUserList.append(row);
+    }
+  }
+
+  async function loadBrowserUsers() {
+    try {
+      const response = await api("/api/v1/browser/users");
+      browserUsers = (response.users || []).map((user) => ({
+        ...user,
+        selected: Boolean(user.selected),
+      }));
+        renderBrowserUsers();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      }
+    }
+  }
+
+  async function saveBrowserUsers() {
+    const selected = browserUsers.filter((user) => user.selected).map((user) => user.sid);
+    setBusy(ui.browserUsersSave, true);
+    clearNotice();
+    try {
+      const response = await api("/api/v1/browser/users", {
+        method: "PUT",
+        body: { sids: selected },
+      });
+      browserUsers = (response.users || []).map((user) => ({
+        ...user,
+        selected: Boolean(user.selected),
+      }));
+        renderBrowserUsers();
+      showNotice("Monitored Windows accounts saved.", "success");
+      await refreshState(false);
+      await loadActivity(true, true);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(ui.browserUsersSave, false);
+    }
+  }
+
+  function renderActivityStatus(status, settings) {
+    settings = settings || {};
+    status = status || {};
+    const enabled = Boolean(settings.enabled && settings.activityLogging);
+    let badge = "Off";
+    let badgeClass = "off";
+    if (enabled && status.activityBackfillPending) {
+      badge = "Importing";
+      badgeClass = "on";
+    } else if (enabled && status.activityLoggingActive) {
+      badge = "On";
+      badgeClass = "on";
+    } else if (enabled) {
+      badge = "Waiting";
+      badgeClass = "error";
+    }
+    ui.activityBadge.textContent = badge;
+    ui.activityBadge.className = "ai-badge " + badgeClass;
+    if (!settings.enabled || !settings.activityLogging) {
+      ui.activityStatusText.textContent = "Detailed browser activity logging is off. Retained activity remains visible until it ages out.";
+    } else if (status.lastError) {
+      ui.activityStatusText.textContent = "Browser activity logging is enabled but reporting an error.";
+    } else if (Number(status.monitoredUsers) === 0) {
+      ui.activityStatusText.textContent = "No Windows account is selected. Select at least one account above to start recording.";
+    } else if (status.activityBackfillPending) {
+      ui.activityStatusText.textContent = "Importing available browser history for the selected accounts.";
+    } else {
+      ui.activityStatusText.textContent =
+        "Recording selected accounts. " + (Number(status.activityEvents24h) || 0) +
+        " events in the last 24 hours. Full URLs, titles, and searches stay on this PC and are never sent to DeepSeek.";
+    }
+  }
+
+  function setActivityFilterOptions(select, values, allLabel) {
+    const current = select.value;
+    select.replaceChildren();
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = allLabel;
+    select.append(all);
+    for (const value of values) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.append(option);
+    }
+    if ([...select.options].some((option) => option.value === current)) {
+      select.value = current;
+    }
+  }
+
+  async function loadActivityFilters() {
+    try {
+      const response = await api("/api/v1/browser/activity/filters");
+      setActivityFilterOptions(ui.activityUser, response.users || [], "All accounts");
+      setActivityFilterOptions(ui.activityBrowser, response.browsers || [], "All browsers");
+      for (const option of ui.activityBrowser.options) {
+        if (option.value) {
+          option.textContent = formatBrowserName(option.value);
+        }
+      }
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      }
+    }
+  }
+
+  async function loadActivity(reset, quiet) {
+    if (activityLoading) {
+      return;
+    }
+    activityLoading = true;
+    try {
+      const hours = Number(ui.activityRange.value) || 24;
+      const to = new Date();
+      const from = new Date(to.getTime() - hours * 3600 * 1000);
+      const params = new URLSearchParams();
+      params.set("from", from.toISOString());
+      params.set("to", to.toISOString());
+      if (ui.activityUser.value) {
+        params.set("user", ui.activityUser.value);
+      }
+      if (ui.activityBrowser.value) {
+        params.set("browser", ui.activityBrowser.value);
+      }
+      if (ui.activityQuery.value.trim()) {
+        params.set("q", ui.activityQuery.value.trim());
+      }
+      if (ui.activityRemoved.checked) {
+        params.set("removed", "true");
+      }
+      params.set("limit", "100");
+      params.set("offset", reset ? "0" : String(activityOffset));
+      const response = await api("/api/v1/browser/activity?" + params.toString());
+      const incoming = response.activity || [];
+      activityItems = reset ? incoming : activityItems.concat(incoming);
+      activityLoadedMore = !reset;
+      activityOffset = activityItems.length;
+      activityHasMore = Boolean(response.hasMore);
+      activityAlerts = response.alerts || [];
+      renderActivity();
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else if (!quiet) {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      activityLoading = false;
+    }
+  }
+
+  function renderActivity() {
+    renderActivityAlerts();
+    ui.activityList.replaceChildren();
+    ui.activityEmpty.hidden = activityItems.length > 0;
+    ui.activityMore.hidden = !activityHasMore;
+    for (const item of activityItems) {
+      const row = document.createElement("article");
+      row.className = "activity-row";
+      if (item.removedAt) {
+        row.classList.add("removed");
+      }
+      const head = document.createElement("div");
+      head.className = "activity-head";
+      const time = document.createElement("time");
+      time.dateTime = item.time;
+      time.textContent = formatTimestamp(item.time);
+      const who = document.createElement("span");
+      who.className = "activity-who";
+      who.textContent = (item.userName || "Unknown user") + " - " +
+        formatBrowserName(item.browser) + (item.profileLabel ? " (" + item.profileLabel + ")" : "");
+      head.append(time, who);
+
+      const title = document.createElement("div");
+      title.className = "activity-title";
+      title.textContent = item.title || item.domain || "Untitled page";
+
+      const url = document.createElement("div");
+      url.className = "activity-url";
+      url.textContent = item.url || "";
+
+      const meta = document.createElement("div");
+      meta.className = "activity-meta";
+      const domain = document.createElement("span");
+      domain.className = "state-chip";
+      domain.textContent = item.domain || "unknown domain";
+      meta.append(domain);
+      if (item.searchEngine || item.searchQuery) {
+        const search = document.createElement("span");
+        search.className = "state-chip";
+        search.textContent = "Search: " + (item.searchEngine ? item.searchEngine + " - " : "") + (item.searchQuery || "");
+        meta.append(search);
+      }
+      if (item.removedAt) {
+        const removed = document.createElement("span");
+        removed.className = "item-badge removed";
+        removed.textContent = "Removed from browser history " + formatTimestamp(item.removedAt);
+        meta.append(removed);
+      }
+      row.append(head, title, url, meta);
+      ui.activityList.append(row);
+    }
+  }
+
+  function renderActivityAlerts() {
+    ui.activityAlerts.replaceChildren();
+    for (const alert of activityAlerts) {
+      const row = document.createElement("div");
+      row.className = "activity-alert";
+      if (alert.acknowledgedAt) {
+        row.classList.add("acknowledged");
+      }
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = alert.reason === "history_database_missing"
+        ? "Browser history database disappeared"
+        : "Browser history was cleared or entries were deleted";
+      const detail = document.createElement("span");
+      detail.className = "item-meta";
+      const count = Number(alert.removedCount) || 0;
+      detail.textContent = (alert.userName || "Unknown user") + " - " +
+        formatBrowserName(alert.browser) + (alert.profileLabel ? " (" + alert.profileLabel + ")" : "") +
+        " - " + formatTimestamp(alert.time) +
+        (count > 0 ? " - " + count + " visits" : "");
+      copy.append(title, detail);
+      row.append(copy);
+      if (!alert.acknowledgedAt) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "small-secondary";
+        button.textContent = "Acknowledge";
+        button.addEventListener("click", () => acknowledgeActivityAlert(alert.id, button));
+        row.append(button);
+      }
+      ui.activityAlerts.append(row);
+    }
+  }
+
+  async function acknowledgeActivityAlert(id, button) {
+    setBusy(button, true);
+    clearNotice();
+    try {
+      await api("/api/v1/browser/activity/alerts/" + encodeURIComponent(id) + "/acknowledge", { method: "POST" });
+      showNotice("History alert acknowledged.", "success");
+      await loadActivity(true, true);
+      await refreshState(false);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) {
+        showLogin("Your session expired. Enter the administrator PIN again.");
+      } else {
+        showNotice(friendlyError(error), "error");
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
   async function saveBrowserSettings(event) {
     event.preventDefault();
     const enabled = ui.browserEnabled.checked;
     const autoBlock = ui.browserAutoBlock.checked;
     const aiClassification = ui.browserAI.checked;
+    const activityLogging = ui.browserActivity.checked;
+    if (activityLogging && !enabled) {
+      showNotice("Enable browser monitoring before recording detailed activity.", "error");
+      return;
+    }
     if (aiClassification && !(currentState && currentState.ai && currentState.ai.keyConfigured)) {
       showNotice("Add a DeepSeek API key before enabling browser AI classification.", "error");
       return;
@@ -592,7 +981,7 @@
     try {
       const response = await api("/api/v1/browser/settings", {
         method: "PUT",
-        body: { enabled, autoBlock, aiClassification },
+        body: { enabled, autoBlock, aiClassification, activityLogging },
       });
       browserFormDirty = false;
       if (currentState) {
@@ -602,6 +991,7 @@
       showNotice("Browser monitoring settings saved.", "success");
       await refreshState(false);
       await Promise.all([loadBrowserData(), loadEvents()]);
+      await loadActivity(true, true);
     } catch (error) {
       if (error instanceof APIError && error.status === 401) {
         showLogin("Your session expired. Enter the administrator PIN again.");
@@ -847,7 +1237,14 @@
       showNotice("Game added to the blocked list.", "success");
       await refreshState(false);
       syncAIForm((currentState && currentState.ai) || {});
-      await Promise.all([loadEvents(), loadStrangeActivity(), loadBrowserData()]);
+      await Promise.all([
+      loadEvents(),
+      loadStrangeActivity(),
+      loadBrowserData(),
+      loadBrowserUsers(),
+      loadActivityFilters(),
+    ]);
+    await loadActivity(true, true);
     } catch (error) {
       if (error instanceof APIError && error.status === 401) {
         showLogin("Your session expired. Enter the administrator PIN again.");
@@ -1200,10 +1597,25 @@
     ui.gameForm.addEventListener("submit", addGame);
     ui.aiForm.addEventListener("submit", saveAISettings);
     ui.browserForm.addEventListener("submit", saveBrowserSettings);
-    for (const input of [ui.browserEnabled, ui.browserAutoBlock, ui.browserAI]) {
+    for (const input of [ui.browserEnabled, ui.browserAutoBlock, ui.browserAI, ui.browserActivity]) {
       input.addEventListener("change", () => { browserFormDirty = true; });
     }
+    ui.browserEnabled.addEventListener("change", () => {
+      if (!ui.browserEnabled.checked) {
+        ui.browserActivity.checked = false;
+      }
+      ui.browserActivity.disabled = !ui.browserEnabled.checked;
+    });
     ui.browserDomainForm.addEventListener("submit", addBrowserDomain);
+    ui.browserUsersSave.addEventListener("click", saveBrowserUsers);
+    ui.activityFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadActivity(true, false);
+    });
+    ui.activityRefresh.addEventListener("click", () => loadActivity(true, false));
+    ui.activityMore.addEventListener("click", () => loadActivity(false, false));
+    ui.activityRange.addEventListener("change", () => loadActivity(true, true));
+    ui.activityRemoved.addEventListener("change", () => loadActivity(true, true));
     ui.aiTestButton.addEventListener("click", testAIConnection);
     ui.aiRemoveKeyButton.addEventListener("click", removeAIKey);
     ui.pinForm.addEventListener("submit", changePIN);

@@ -141,3 +141,106 @@ func TestDashboardAssetsIncludeBrowserPanel(t *testing.T) {
 		t.Fatalf("dashboard JS missing browser API: status=%d", js.status)
 	}
 }
+
+func TestBrowserJournalUsersActivityAndAlerts(t *testing.T) {
+	app := newTestApp(t, true)
+	csrf := app.login(t, "123456")
+
+	users := app.request(t, http.MethodGet, "/api/v1/browser/users", nil, "", "")
+	if users.status != http.StatusOK || !strings.Contains(string(users.body), `PC\\kid`) {
+		t.Fatalf("users status=%d body=%s", users.status, users.body)
+	}
+	updated := app.request(t, http.MethodPut, "/api/v1/browser/users",
+		map[string]any{"sids": []string{"S-1-5-21-1"}}, csrf, "")
+	if updated.status != http.StatusOK || !strings.Contains(string(updated.body), `"selected":true`) {
+		t.Fatalf("update users status=%d body=%s", updated.status, updated.body)
+	}
+
+	settings := app.request(t, http.MethodPut, "/api/v1/browser/settings",
+		map[string]any{"enabled": true, "autoBlock": true, "aiClassification": false, "activityLogging": true}, csrf, "")
+	if settings.status != http.StatusOK {
+		t.Fatalf("journal settings status=%d body=%s", settings.status, settings.body)
+	}
+	now := time.Now().UTC()
+	if _, err := app.store.RecordBrowserActivity(now, []model.BrowserVisit{{
+		Browser: "chrome", Domain: "google.com", VisitedAt: now,
+		UserSID: "S-1-5-21-1", UserName: `PC\kid`, ProfileKey: "profile-1", ProfileLabel: "Default",
+		SourceKey: "source-1", URL: "https://www.google.com/search?q=algebra",
+		Title: "algebra - Google Search", SearchEngine: "Google", SearchQuery: "algebra",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	from := now.Add(-time.Hour).Format(time.RFC3339)
+	to := now.Add(time.Minute).Format(time.RFC3339)
+	activity := app.request(t, http.MethodGet, "/api/v1/browser/activity?from="+from+"&to="+to, nil, "", "")
+	if activity.status != http.StatusOK {
+		t.Fatalf("activity status=%d body=%s", activity.status, activity.body)
+	}
+	payload := decodeMap(t, activity.body)
+	items := payload["activity"].([]any)
+	if len(items) != 1 || !strings.Contains(string(activity.body), "algebra") {
+		t.Fatalf("activity payload=%s", activity.body)
+	}
+	if strings.Contains(string(activity.body), "0001-01-01") {
+		t.Fatalf("activity payload leaked a zero timestamp: %s", activity.body)
+	}
+	filters := app.request(t, http.MethodGet, "/api/v1/browser/activity/filters", nil, "", "")
+	if filters.status != http.StatusOK || !strings.Contains(string(filters.body), `PC\\kid`) {
+		t.Fatalf("filters status=%d body=%s", filters.status, filters.body)
+	}
+
+	alert, err := app.store.RecordBrowserHistoryAlert(model.BrowserHistoryAlert{
+		Time: now, UserSID: "S-1-5-21-1", UserName: `PC\kid`, Browser: "chrome",
+		ProfileLabel: "Default", RemovedCount: 8, Reason: model.BrowserHistoryAlertBulkRemoval,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity = app.request(t, http.MethodGet, "/api/v1/browser/activity", nil, "", "")
+	if !strings.Contains(string(activity.body), `"alerts"`) || !strings.Contains(string(activity.body), alert.ID) {
+		t.Fatalf("activity alerts missing: %s", activity.body)
+	}
+	ack := app.request(t, http.MethodPost, "/api/v1/browser/activity/alerts/"+alert.ID+"/acknowledge", nil, csrf, "")
+	if ack.status != http.StatusNoContent {
+		t.Fatalf("ack status=%d body=%s", ack.status, ack.body)
+	}
+	if count, err := app.store.UnacknowledgedBrowserHistoryAlertsCount(); err != nil || count != 0 {
+		t.Fatalf("unacknowledged=%d err=%v", count, err)
+	}
+}
+
+func TestBrowserActivityValidationAndLoggingRequiresMonitoring(t *testing.T) {
+	app := newTestApp(t, true)
+	if result := app.request(t, http.MethodGet, "/api/v1/browser/activity", nil, "", ""); result.status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated activity status=%d", result.status)
+	}
+	csrf := app.login(t, "123456")
+	if result := app.request(t, http.MethodPut, "/api/v1/browser/users",
+		map[string]any{"sids": []string{"S-1-5-21-1"}}, "", ""); result.status != http.StatusForbidden {
+		t.Fatalf("users without CSRF status=%d", result.status)
+	}
+	if result := app.request(t, http.MethodGet, "/api/v1/browser/activity?browser=unknown", nil, "", ""); result.status != http.StatusBadRequest {
+		t.Fatalf("invalid browser status=%d body=%s", result.status, result.body)
+	}
+	if result := app.request(t, http.MethodGet, "/api/v1/browser/activity?limit=999", nil, "", ""); result.status != http.StatusBadRequest {
+		t.Fatalf("invalid limit status=%d body=%s", result.status, result.body)
+	}
+	if result := app.request(t, http.MethodPut, "/api/v1/browser/settings",
+		map[string]any{"enabled": false, "activityLogging": true}, csrf, ""); result.status != http.StatusBadRequest {
+		t.Fatalf("journal without monitoring status=%d body=%s", result.status, result.body)
+	}
+}
+
+func TestDashboardAssetsIncludeActivityPanel(t *testing.T) {
+	app := newTestApp(t, true)
+	index := app.request(t, http.MethodGet, "/", nil, "", "")
+	if index.status != http.StatusOK || !strings.Contains(string(index.body), "Browser activity") ||
+		!strings.Contains(string(index.body), "Monitored Windows accounts") {
+		t.Fatalf("dashboard missing activity panel: status=%d", index.status)
+	}
+	js := app.request(t, http.MethodGet, "/assets/app.js", nil, "", "")
+	if js.status != http.StatusOK || !strings.Contains(string(js.body), "/api/v1/browser/activity") ||
+		!strings.Contains(string(js.body), "/api/v1/browser/users") {
+		t.Fatalf("dashboard JS missing activity API: status=%d", js.status)
+	}
+}

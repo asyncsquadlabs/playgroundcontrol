@@ -159,12 +159,12 @@
         <section class="panel browser-panel" aria-labelledby="browserTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Optional Chrome and Edge monitoring</p>
+              <p class="eyebrow">Optional cross-browser monitoring</p>
               <h2 id="browserTitle">Browser monitoring</h2>
             </div>
             <span id="browserStatusBadge" class="ai-badge off">Off</span>
           </div>
-          <p id="browserStatusText" class="hint">Chrome and Edge history is not monitored.</p>
+          <p id="browserStatusText" class="hint">Browser history is not monitored or journaled.</p>
           <form id="browserForm" class="compact-form" novalidate>
             <label class="checkbox-row" for="browserEnabled">
               <input id="browserEnabled" name="browserEnabled" type="checkbox">
@@ -178,11 +178,31 @@
               <input id="browserAI" name="browserAI" type="checkbox">
               <span>Ask DeepSeek about unknown domains (domain only)</span>
             </label>
-            <p class="hint">History polling is retrospective: a game tab may stay open until it reloads or navigates. Only the registrable domain is stored or sent to DeepSeek; full URLs, paths, page titles, and profile paths are never used. Policies and hosts entries are active only while play is blocked.</p>
+            <label class="checkbox-row" for="browserActivity">
+              <input id="browserActivity" name="browserActivity" type="checkbox">
+              <span>Record detailed browser activity (URLs, titles, searches)</span>
+            </label>
+            <p class="hint">Game detection stores only the registrable domain. Detailed activity is different: for the Windows accounts you select below, Playground Control keeps full URLs, page titles, and search queries on this PC for 90 days. That local journal survives browser-history deletion and is never sent to DeepSeek. Private and incognito windows are not captured. History polling is best-effort and retrospective.</p>
             <div class="button-row">
               <button type="submit" class="secondary">Save browser settings</button>
             </div>
           </form>
+
+          <div class="browser-accounts">
+            <div class="panel-heading">
+              <div>
+                <h3>Monitored Windows accounts</h3>
+                <span id="browserUserCount" class="count"></span>
+              </div>
+            </div>
+            <p class="hint">Only checked accounts are recorded in the detailed journal. Game-domain detection still scans every running browser while play is blocked. Nothing is selected by default.</p>
+            <div id="browserUserList" class="item-list"></div>
+            <p id="browserUserEmpty" class="empty" hidden>No Windows profiles were found.</p>
+            <div class="button-row">
+              <button id="browserUsersSave" type="button" class="secondary">Save monitored accounts</button>
+            </div>
+          </div>
+
           <div id="browserControlState" class="browser-state"></div>
 
           <div class="browser-grid">
@@ -222,6 +242,56 @@
           <h3 class="subsection-title">Recent browser detections</h3>
           <div id="browserDetectionList" class="event-list"></div>
           <p id="browserDetectionEmpty" class="empty" hidden>No browser domains detected yet.</p>
+        </section>
+
+        <section class="panel browser-activity-panel" aria-labelledby="activityTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Local 90-day journal</p>
+              <h2 id="activityTitle">Browser activity</h2>
+            </div>
+            <span id="activityBadge" class="ai-badge off">Off</span>
+          </div>
+          <p id="activityStatusText" class="hint">Detailed browser activity logging is off.</p>
+          <div id="activityAlerts" class="alert-stack"></div>
+
+          <form id="activityFilterForm" class="activity-filters" novalidate>
+            <div>
+              <label for="activityUser">Windows account</label>
+              <select id="activityUser" name="activityUser"><option value="">All accounts</option></select>
+            </div>
+            <div>
+              <label for="activityBrowser">Browser</label>
+              <select id="activityBrowser" name="activityBrowser"><option value="">All browsers</option></select>
+            </div>
+            <div>
+              <label for="activityRange">Time range</label>
+              <select id="activityRange" name="activityRange">
+                <option value="24">Last 24 hours</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+                <option value="2160">Last 90 days</option>
+              </select>
+            </div>
+            <div class="activity-search">
+              <label for="activityQuery">Search URL, title, query, or domain</label>
+              <input id="activityQuery" name="activityQuery" type="search" maxlength="200" autocomplete="off" spellcheck="false" placeholder="algebra, youtube.com, ...">
+            </div>
+            <label class="checkbox-row" for="activityRemoved">
+              <input id="activityRemoved" name="activityRemoved" type="checkbox">
+              <span>Deleted from browser history only</span>
+            </label>
+            <div class="button-row">
+              <button type="submit" class="secondary">Apply filters</button>
+              <button id="activityRefresh" type="button" class="secondary">Refresh</button>
+            </div>
+          </form>
+
+          <div id="activityList" class="activity-list"></div>
+          <p id="activityEmpty" class="empty" hidden>No browser activity matches these filters.</p>
+          <div class="button-row">
+            <button id="activityMore" type="button" class="secondary" hidden>Load more</button>
+          </div>
         </section>
 
         <section class="panel" aria-labelledby="strangeTitle">

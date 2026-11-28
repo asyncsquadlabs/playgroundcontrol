@@ -4,7 +4,6 @@ package browserwatch
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -20,41 +19,44 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
-	_ "modernc.org/sqlite" // register the pure-Go SQLite driver
-
-	"github.com/asyncsquadlabs/playgroundcontrol/internal/domains"
+	"github.com/asyncsquadlabs/playgroundcontrol/internal/model"
 )
 
 const (
-	chromeEpochOffsetMicros = int64(11_644_473_600_000_000)
-	historyQueryLimit       = 5_000
-	profileRetention        = 5 * time.Minute
+	profileRetention = 5 * time.Minute
+	profileListKey   = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`
 )
 
-type profileSpec struct {
-	Path    string
-	Browser string
-}
-
 type profileCache struct {
-	ModTime time.Time
-	Size    int64
-	WALMod  time.Time
-	WALSize int64
-	Loaded  bool
-	Visits  []Visit
+	ModTime  time.Time
+	Size     int64
+	WALMod   time.Time
+	WALSize  int64
+	Since    time.Time
+	Detailed bool
+	Loaded   bool
+	Records  []historyRecord
+	Count    int64
 }
 
-// WindowsHistorySource reads Chrome and Edge History SQLite databases for
-// interactive users with a running browser. It never exposes full URLs to
-// callers.
+type localUser struct {
+	SID  string
+	Name string
+	Path string
+}
+
+// WindowsHistorySource reads browser history databases for local Windows
+// profiles. Detailed records are only persisted by the watcher when activity
+// logging is enabled.
 type WindowsHistorySource struct {
 	tempDir string
 
-	mu          sync.Mutex
-	profiles    map[string]time.Time
-	cache       map[string]profileCache
-	sidProfiles map[string]string
+	mu        sync.Mutex
+	profiles  map[string]time.Time
+	cache     map[string]profileCache
+	userCache map[string]string
+	users     []localUser
+	usersAt   time.Time
 }
 
 // NewHistorySource builds a history source. baseTempDir should be the protected
@@ -65,23 +67,147 @@ func NewHistorySource(baseTempDir string) *WindowsHistorySource {
 		baseTempDir = os.TempDir()
 	}
 	return &WindowsHistorySource{
-		tempDir:     filepath.Join(baseTempDir, "browser-history"),
-		profiles:    make(map[string]time.Time),
-		cache:       make(map[string]profileCache),
-		sidProfiles: make(map[string]string),
+		tempDir:   filepath.Join(baseTempDir, "browser-history"),
+		profiles:  make(map[string]time.Time),
+		cache:     make(map[string]profileCache),
+		userCache: make(map[string]string),
 	}
 }
 
-// RecentVisits returns unique normalized domains visited since the cutoff.
-func (s *WindowsHistorySource) RecentVisits(ctx context.Context, since time.Time) ([]Visit, error) {
+// BrowserUsers returns every local profile that can be selected for journaling.
+func (s *WindowsHistorySource) BrowserUsers(ctx context.Context) ([]model.BrowserUser, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	users, err := s.discoverLocalUsers()
+	if err != nil {
+		return nil, sanitizeHistoryError(err)
+	}
+	out := make([]model.BrowserUser, 0, len(users))
+	for _, user := range users {
+		specs := browserProfilesForUser(user.Path, user.SID, user.Name, false)
+		seen := make(map[string]struct{})
+		browsers := make([]string, 0)
+		for _, spec := range specs {
+			if _, ok := seen[spec.Browser]; ok {
+				continue
+			}
+			seen[spec.Browser] = struct{}{}
+			browsers = append(browsers, spec.Browser)
+		}
+		sort.Strings(browsers)
+		out = append(out, model.BrowserUser{
+			SID: user.SID, UserName: user.Name, Browsers: browsers,
+			Available: true,
+		})
+	}
+	return out, nil
+}
+
+// RecentGameVisits returns domain-level visits for users with a running
+// supported browser.
+func (s *WindowsHistorySource) RecentGameVisits(ctx context.Context, since time.Time) ([]model.BrowserVisit, error) {
 	if s == nil {
 		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	running := runningBrowserSIDs()
+	visits, _, err := s.scanLocked(ctx, since, nil, running, false, gameHistoryQueryLimit)
+	return visits, err
+}
 
+// RecentJournalScan returns detailed visits for selected users plus all
+// running browser users, and profile counts for deletion auditing.
+func (s *WindowsHistorySource) RecentJournalScan(ctx context.Context, since time.Time, selected map[string]struct{}) ([]model.BrowserVisit, []model.BrowserProfileInfo, error) {
+	if s == nil {
+		return nil, nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	running := runningBrowserSIDs()
+	return s.scanLocked(ctx, since, selected, running, true, journalHistoryQueryLimit)
+}
+
+func (s *WindowsHistorySource) scanLocked(ctx context.Context, since time.Time, selected map[string]struct{}, running map[string]bool, detailed bool, limit int) ([]model.BrowserVisit, []model.BrowserProfileInfo, error) {
+	specs, discoverErr := s.discoverProfilesLocked(running)
+	if discoverErr != nil && len(specs) == 0 {
+		return nil, nil, sanitizeHistoryError(discoverErr)
+	}
+	if len(selected) == 0 {
+		selected = nil
+	}
+	var (
+		visits   []model.BrowserVisit
+		infos    []model.BrowserProfileInfo
+		firstErr error
+		readable int
+	)
+	for _, spec := range specs {
+		if err := ctx.Err(); err != nil {
+			return nil, infos, err
+		}
+		if !spec.Running {
+			if _, ok := selected[strings.ToUpper(spec.UserSID)]; !ok {
+				continue
+			}
+		}
+		records, count, err := s.readProfileLocked(ctx, spec, since, detailed, detailed)
+		info := model.BrowserProfileInfo{
+			ProfileKey: spec.ProfileKey, Browser: spec.Browser,
+			UserSID: spec.UserSID, UserName: spec.UserName,
+			ProfileLabel: spec.ProfileLabel, HistoryCount: count,
+			Readable: err == nil,
+		}
+		if err != nil {
+			info.Error = sanitizeHistoryError(err).Error()
+			if firstErr == nil {
+				firstErr = err
+			}
+			infos = append(infos, info)
+			continue
+		}
+		readable++
+		infos = append(infos, info)
+		for _, record := range records {
+			if record.VisitedAt.Before(since) {
+				continue
+			}
+			visit, ok := makeBrowserVisit(record, spec, detailed)
+			if !ok {
+				continue
+			}
+			visits = append(visits, visit)
+		}
+	}
+	sort.Slice(visits, func(i, j int) bool {
+		if !visits[i].VisitedAt.Equal(visits[j].VisitedAt) {
+			return visits[i].VisitedAt.After(visits[j].VisitedAt)
+		}
+		if visits[i].Browser != visits[j].Browser {
+			return visits[i].Browser < visits[j].Browser
+		}
+		return visits[i].Domain < visits[j].Domain
+	})
+	if readable == 0 && firstErr != nil {
+		return nil, infos, sanitizeHistoryError(firstErr)
+	}
+	return visits, infos, nil
+}
+
+func (s *WindowsHistorySource) discoverProfilesLocked(running map[string]bool) ([]profileSpec, error) {
 	now := time.Now().UTC()
-	specs, discoverErr := s.discoverProfiles()
+	users, discoverErr := s.discoverLocalUsers()
+	var specs []profileSpec
+	for _, user := range users {
+		specs = append(specs, browserProfilesForUser(user.Path, user.SID, user.Name, running[user.SID])...)
+	}
+	specs = dedupeProfiles(specs)
 	for _, spec := range specs {
 		s.profiles[spec.Path] = now
 	}
@@ -91,211 +217,274 @@ func (s *WindowsHistorySource) RecentVisits(ctx context.Context, since time.Time
 			delete(s.cache, path)
 		}
 	}
-	if len(s.profiles) == 0 {
-		return nil, sanitizeHistoryError(discoverErr)
-	}
+	return specs, discoverErr
+}
 
-	paths := make([]string, 0, len(s.profiles))
-	for path := range s.profiles {
-		paths = append(paths, path)
+func (s *WindowsHistorySource) discoverLocalUsers() ([]localUser, error) {
+	if len(s.users) > 0 && time.Since(s.usersAt) < time.Minute {
+		return append([]localUser(nil), s.users...), nil
 	}
-	sort.Strings(paths)
-
-	var (
-		visits   []Visit
-		firstErr error
-		loaded   int
-	)
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
+	if err != nil {
+		if len(s.users) > 0 {
+			return append([]localUser(nil), s.users...), nil
 		}
-		profileVisits, err := s.readProfile(ctx, path, since)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+		return nil, fmt.Errorf("open profile list: %w", err)
+	}
+	defer key.Close()
+	names, err := key.ReadSubKeyNames(-1)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate profiles: %w", err)
+	}
+	var users []localUser
+	for _, sid := range names {
+		if skipProfileSID(sid) {
 			continue
 		}
-		loaded++
-		for _, visit := range profileVisits {
-			if visit.VisitedAt.Before(since) {
-				continue
-			}
-			visits = append(visits, visit)
+		sub, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey+`\`+sid, registry.QUERY_VALUE)
+		if err != nil {
+			continue
 		}
+		value, _, err := sub.GetStringValue("ProfileImagePath")
+		_ = sub.Close()
+		if err != nil {
+			continue
+		}
+		profilePath := os.ExpandEnv(strings.TrimSpace(value))
+		if profilePath == "" {
+			continue
+		}
+		if info, err := os.Stat(profilePath); err != nil || !info.IsDir() {
+			continue
+		}
+		if strings.Contains(strings.ToLower(profilePath), `\system32\`) {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(profilePath))
+		if base == "public" || base == "default" || base == "default user" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(profilePath, "NTUSER.DAT")); err != nil {
+			continue
+		}
+		name := s.userName(sid)
+		users = append(users, localUser{SID: sid, Name: name, Path: profilePath})
 	}
-	deduped := dedupeVisits(visits)
-	if loaded == 0 && firstErr != nil {
-		return nil, sanitizeHistoryError(firstErr)
-	}
-	return deduped, nil
+	sort.Slice(users, func(i, j int) bool {
+		if users[i].Name != users[j].Name {
+			return users[i].Name < users[j].Name
+		}
+		return users[i].SID < users[j].SID
+	})
+	s.users = append([]localUser(nil), users...)
+	s.usersAt = time.Now()
+	return users, nil
 }
 
-func (s *WindowsHistorySource) discoverProfiles() ([]profileSpec, error) {
-	var (
-		specs    []profileSpec
-		firstErr error
-	)
-	seenSIDs := make(map[string]struct{})
-	for _, processName := range []string{"chrome.exe", "msedge.exe"} {
-		sids, err := processUserSIDs(processName)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-		for _, sid := range sids {
-			if _, duplicate := seenSIDs[sid]; duplicate {
-				continue
+func (s *WindowsHistorySource) userName(sid string) string {
+	if cached, ok := s.userCache[sid]; ok {
+		return cached
+	}
+	name := sid
+	if parsed, err := windows.StringToSid(sid); err == nil {
+		if account, domain, _, err := parsed.LookupAccount(""); err == nil && account != "" {
+			if domain != "" {
+				name = domain + `\` + account
+			} else {
+				name = account
 			}
-			seenSIDs[sid] = struct{}{}
-			profile, ok := s.sidProfiles[sid]
-			if !ok {
-				profile, err = profilePathForSID(sid)
-				if err != nil {
-					if firstErr == nil {
-						firstErr = err
-					}
-					continue
-				}
-				s.sidProfiles[sid] = profile
-			}
-			specs = append(specs, browserProfiles(profile)...)
 		}
 	}
-	return dedupeProfiles(specs), firstErr
+	s.userCache[sid] = name
+	return name
 }
 
-func browserProfiles(profilePath string) []profileSpec {
-	bases := []profileSpec{
-		{Path: filepath.Join(profilePath, "AppData", "Local", "Google", "Chrome", "User Data"), Browser: "chrome"},
-		{Path: filepath.Join(profilePath, "AppData", "Local", "Microsoft", "Edge", "User Data"), Browser: "edge"},
+func skipProfileSID(sid string) bool {
+	switch strings.ToUpper(sid) {
+	case "S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-7":
+		return true
+	}
+	return !strings.HasPrefix(strings.ToUpper(sid), "S-1-5-21-") &&
+		!strings.HasPrefix(strings.ToUpper(sid), "S-1-12-1-")
+}
+
+func browserProfilesForUser(profilePath, sid, userName string, running bool) []profileSpec {
+	type chromiumBase struct {
+		root    string
+		browser string
+		label   string
+	}
+	bases := []chromiumBase{
+		{filepath.Join(profilePath, "AppData", "Local", "Google", "Chrome", "User Data"), model.BrowserChrome, ""},
+		{filepath.Join(profilePath, "AppData", "Local", "Microsoft", "Edge", "User Data"), model.BrowserEdge, ""},
+		{filepath.Join(profilePath, "AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data"), model.BrowserBrave, ""},
+		{filepath.Join(profilePath, "AppData", "Local", "Vivaldi", "User Data"), model.BrowserVivaldi, ""},
+		{filepath.Join(profilePath, "AppData", "Local", "Chromium", "User Data"), model.BrowserChromium, ""},
+		{filepath.Join(profilePath, "AppData", "Roaming", "Opera Software", "Opera Stable"), model.BrowserOpera, "Opera Stable"},
+		{filepath.Join(profilePath, "AppData", "Roaming", "Opera Software", "Opera GX Stable"), model.BrowserOpera, "Opera GX"},
 	}
 	var out []profileSpec
 	for _, base := range bases {
-		entries, err := os.ReadDir(base.Path)
-		if err != nil {
+		out = append(out, chromiumProfileSpecs(base.root, base.browser, base.label, sid, userName, running)...)
+	}
+	out = append(out, firefoxProfileSpecs(filepath.Join(profilePath, "AppData", "Roaming", "Mozilla", "Firefox"), sid, userName, running)...)
+	return out
+}
+
+func chromiumProfileSpecs(root, browser, labelPrefix, sid, userName string, running bool) []profileSpec {
+	var out []profileSpec
+	add := func(historyPath, label string) {
+		if !regularFile(historyPath) {
+			return
+		}
+		out = append(out, profileSpec{
+			Path: historyPath, Browser: browser, UserSID: sid, UserName: userName,
+			ProfileKey: profileKeyForPath(historyPath), ProfileLabel: label, Running: running,
+		})
+	}
+	if regularFile(filepath.Join(root, "History")) {
+		add(filepath.Join(root, "History"), labelPrefix)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return out
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || skipChromiumProfileDir(entry.Name()) {
 			continue
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			history := filepath.Join(base.Path, entry.Name(), "History")
-			info, err := os.Stat(history)
-			if err == nil && info.Mode().IsRegular() {
-				out = append(out, profileSpec{Path: history, Browser: base.Browser})
-			}
+		historyPath := filepath.Join(root, entry.Name(), "History")
+		label := entry.Name()
+		if labelPrefix != "" {
+			label = labelPrefix + " " + entry.Name()
 		}
+		add(historyPath, label)
 	}
 	return out
 }
 
-func processUserSIDs(processName string) ([]string, error) {
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return nil, fmt.Errorf("create process snapshot: %w", err)
+func skipChromiumProfileDir(name string) bool {
+	switch strings.ToLower(name) {
+	case "guest profile", "system profile", "snapshots", "grshadercache", "graphitedawncache",
+		"shadercache", "browsermetrics", "crashpad", "crowd deny", "meipreload",
+		"optimizationhints", "safe browsing", "widevinecdm", "zxcvbndata", "first run":
+		return true
 	}
-	defer windows.CloseHandle(snapshot)
-
-	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
-	if err := windows.Process32First(snapshot, &entry); err != nil {
-		return nil, fmt.Errorf("read first process: %w", err)
-	}
-	var out []string
-	for {
-		if strings.EqualFold(windows.UTF16ToString(entry.ExeFile[:]), processName) && entry.ProcessID != 0 {
-			var session uint32
-			if err := windows.ProcessIdToSessionId(entry.ProcessID, &session); err == nil && session != 0 {
-				handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, entry.ProcessID)
-				if err == nil {
-					var token windows.Token
-					if err := windows.OpenProcessToken(handle, windows.TOKEN_QUERY, &token); err == nil {
-						if user, err := token.GetTokenUser(); err == nil && user != nil && user.User.Sid != nil {
-							out = append(out, user.User.Sid.String())
-						}
-						token.Close()
-					}
-					windows.CloseHandle(handle)
-				}
-			}
-		}
-		if err := windows.Process32Next(snapshot, &entry); err != nil {
-			if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
-				break
-			}
-			return out, fmt.Errorf("read next process: %w", err)
-		}
-	}
-	return out, nil
+	return false
 }
 
-func profilePathForSID(sid string) (string, error) {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\`+sid, registry.QUERY_VALUE)
-	if err != nil {
-		return "", fmt.Errorf("open profile list entry: %w", err)
+func firefoxProfileSpecs(root, sid, userName string, running bool) []profileSpec {
+	seen := make(map[string]struct{})
+	var out []profileSpec
+	add := func(dir string) {
+		places := filepath.Join(dir, "places.sqlite")
+		clean := filepath.Clean(places)
+		if _, ok := seen[strings.ToLower(clean)]; ok || !regularFile(places) {
+			return
+		}
+		seen[strings.ToLower(clean)] = struct{}{}
+		out = append(out, profileSpec{
+			Path: clean, Browser: model.BrowserFirefox, UserSID: sid, UserName: userName,
+			ProfileKey: profileKeyForPath(clean), ProfileLabel: filepath.Base(dir), Running: running,
+		})
 	}
-	defer key.Close()
-	value, _, err := key.GetStringValue("ProfileImagePath")
-	if err != nil {
-		return "", fmt.Errorf("read profile image path: %w", err)
+	if data, err := os.ReadFile(filepath.Join(root, "profiles.ini")); err == nil { // #nosec G304 -- fixed profile path.
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(strings.ToLower(line), "path=") {
+				continue
+			}
+			value := strings.TrimSpace(line[len("path="):])
+			if value == "" {
+				continue
+			}
+			if filepath.IsAbs(value) {
+				add(value)
+			} else {
+				add(filepath.Join(root, value))
+			}
+		}
 	}
-	value = os.ExpandEnv(strings.TrimSpace(value))
-	if value == "" {
-		return "", errors.New("profile image path is empty")
+	matches, _ := filepath.Glob(filepath.Join(root, "Profiles", "*", "places.sqlite"))
+	for _, match := range matches {
+		add(filepath.Dir(match))
 	}
-	return value, nil
+	return out
 }
 
-func (s *WindowsHistorySource) readProfile(ctx context.Context, historyPath string, since time.Time) ([]Visit, error) {
-	info, err := os.Stat(historyPath)
+func (s *WindowsHistorySource) readProfileLocked(ctx context.Context, spec profileSpec, since time.Time, detailed, needCount bool) ([]historyRecord, int64, error) {
+	info, err := os.Stat(spec.Path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	walMod, walSize := fileInfo(historyPath + "-wal")
-	cached, ok := s.cache[historyPath]
+	walMod, walSize := fileInfo(spec.Path + "-wal")
+	cached, ok := s.cache[spec.Path]
 	if ok && cached.Loaded && cached.ModTime.Equal(info.ModTime()) && cached.Size == info.Size() &&
-		cached.WALMod.Equal(walMod) && cached.WALSize == walSize {
-		return cached.Visits, nil
+		cached.WALMod.Equal(walMod) && cached.WALSize == walSize &&
+		!since.Before(cached.Since) && (!detailed || cached.Detailed) {
+		return cached.Records, cached.Count, nil
 	}
 
 	if err := os.MkdirAll(s.tempDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create browser history temp directory: %w", err)
+		return nil, 0, fmt.Errorf("create browser history temp directory: %w", err)
 	}
 	scanDir, err := os.MkdirTemp(s.tempDir, "scan-")
 	if err != nil {
-		return nil, fmt.Errorf("create browser history snapshot directory: %w", err)
+		return nil, 0, fmt.Errorf("create browser history snapshot directory: %w", err)
 	}
 	defer os.RemoveAll(scanDir)
 
-	copyPath := filepath.Join(scanDir, "History")
-	if err := copyHistoryFile(historyPath, copyPath); err != nil {
-		return nil, fmt.Errorf("copy browser history: %w", err)
+	copyPath := filepath.Join(scanDir, filepath.Base(spec.Path))
+	var copyErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		copyErr = copyHistoryFile(spec.Path, copyPath)
+		if copyErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if copyErr != nil {
+		return nil, 0, fmt.Errorf("copy browser history: %w", copyErr)
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		source := historyPath + suffix
-		if _, err := os.Stat(source); err == nil {
-			_ = copyHistoryFile(source, copyPath+suffix)
+		if _, err := os.Stat(spec.Path + suffix); err == nil {
+			_ = copyHistoryFile(spec.Path+suffix, copyPath+suffix)
 		}
 	}
 
-	browser := "chrome"
-	if strings.Contains(strings.ToLower(historyPath), strings.ToLower(filepath.Join("Microsoft", "Edge"))) {
-		browser = "edge"
+	limit := gameHistoryQueryLimit
+	if detailed {
+		limit = journalHistoryQueryLimit
 	}
-	visits, err := queryHistory(ctx, copyPath, browser, since)
+	var records []historyRecord
+	if spec.Browser == model.BrowserFirefox {
+		records, err = queryFirefoxHistory(ctx, copyPath, since, detailed, limit)
+	} else {
+		records, err = queryChromiumHistory(ctx, copyPath, since, detailed, limit)
+	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	s.cache[historyPath] = profileCache{
-		ModTime: info.ModTime(),
-		Size:    info.Size(),
-		WALMod:  walMod,
-		WALSize: walSize,
-		Loaded:  true,
-		Visits:  visits,
+	var count int64
+	if needCount {
+		count, err = queryHistoryCount(ctx, copyPath, spec.Browser)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
-	return visits, nil
+	s.cache[spec.Path] = profileCache{
+		ModTime: info.ModTime(), Size: info.Size(), WALMod: walMod, WALSize: walSize,
+		Since: since, Detailed: detailed, Loaded: true, Records: records, Count: count,
+	}
+	return records, count, nil
+}
+
+func regularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func fileInfo(path string) (time.Time, int64) {
@@ -327,65 +516,60 @@ func copyHistoryFile(source, destination string) error {
 	return dst.Close()
 }
 
-func queryHistory(ctx context.Context, path, browser string, since time.Time) ([]Visit, error) {
-	// Open the copied database read-write so SQLite can recover any WAL pages
-	// into the snapshot. The copy lives under the protected data directory and
-	// is removed after the query.
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, fmt.Errorf("open browser history snapshot: %w", err)
+func runningBrowserSIDs() map[string]bool {
+	names := map[string]struct{}{
+		"chrome.exe": {}, "msedge.exe": {}, "firefox.exe": {}, "brave.exe": {},
+		"vivaldi.exe": {}, "opera.exe": {}, "opera_gx.exe": {}, "chromium.exe": {},
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	out := make(map[string]bool)
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return out
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return out
+	}
+	for {
+		name := strings.ToLower(windows.UTF16ToString(entry.ExeFile[:]))
+		if _, ok := names[name]; ok && entry.ProcessID != 0 {
+			var session uint32
+			if err := windows.ProcessIdToSessionId(entry.ProcessID, &session); err == nil && session != 0 {
+				if sid := processUserSID(entry.ProcessID); sid != "" {
+					out[sid] = true
+				}
+			}
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return out
+}
 
-	cutoff := since.UTC().UnixMicro() + chromeEpochOffsetMicros
-	if since.IsZero() {
-		cutoff = 0
-	}
-	var visits []Visit
-	rows, err := db.QueryContext(ctx,
-		`SELECT v.visit_time, u.url FROM visits v JOIN urls u ON v.url = u.id
-		 WHERE v.visit_time >= ? ORDER BY v.visit_time DESC LIMIT ?`, cutoff, historyQueryLimit)
+func processUserSID(pid uint32) string {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
-		if rows != nil {
-			rows.Close()
-		}
-		// Older or unusual profiles may not have the visits table; fall back to
-		// the URL last-visit timestamp.
-		rows, err = db.QueryContext(ctx,
-			`SELECT last_visit_time, url FROM urls
-			 WHERE last_visit_time >= ? ORDER BY last_visit_time DESC LIMIT ?`, cutoff, historyQueryLimit)
-		if err != nil {
-			return nil, fmt.Errorf("query browser history: %w", err)
-		}
+		return ""
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var chromeTime int64
-		var rawURL string
-		if err := rows.Scan(&chromeTime, &rawURL); err != nil {
-			return nil, fmt.Errorf("read browser history row: %w", err)
-		}
-		domain, err := domains.Normalize(rawURL)
-		if err != nil {
-			continue
-		}
-		visits = append(visits, Visit{
-			Browser:   browser,
-			Domain:    domain,
-			VisitedAt: time.UnixMicro(chromeTime - chromeEpochOffsetMicros).UTC(),
-		})
+	defer windows.CloseHandle(handle)
+	var token windows.Token
+	if err := windows.OpenProcessToken(handle, windows.TOKEN_QUERY, &token); err != nil {
+		return ""
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read browser history: %w", err)
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil || user == nil || user.User.Sid == nil {
+		return ""
 	}
-	return visits, nil
+	return user.User.Sid.String()
 }
 
 var (
 	userProfilePathPattern = regexp.MustCompile(`(?i)([a-z]:\\users\\)[^\\]+`)
 	userSIDPattern         = regexp.MustCompile(`(?i)S-1-[0-9-]+`)
+	historyURLPattern      = regexp.MustCompile(`(?i)https?://\S+`)
 )
 
 func sanitizeHistoryError(err error) error {
@@ -394,6 +578,7 @@ func sanitizeHistoryError(err error) error {
 	}
 	message := userProfilePathPattern.ReplaceAllString(err.Error(), `${1}<user>`)
 	message = userSIDPattern.ReplaceAllString(message, "<sid>")
+	message = historyURLPattern.ReplaceAllString(message, "<url>")
 	return errors.New(message)
 }
 
@@ -408,26 +593,5 @@ func dedupeProfiles(specs []profileSpec) []profileSpec {
 		out = append(out, spec)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
-}
-
-func dedupeVisits(visits []Visit) []Visit {
-	best := make(map[string]Visit, len(visits))
-	for _, visit := range visits {
-		key := visit.Browser + "\x00" + visit.Domain
-		if existing, ok := best[key]; !ok || visit.VisitedAt.After(existing.VisitedAt) {
-			best[key] = visit
-		}
-	}
-	out := make([]Visit, 0, len(best))
-	for _, visit := range best {
-		out = append(out, visit)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].VisitedAt.Equal(out[j].VisitedAt) {
-			return out[i].VisitedAt.After(out[j].VisitedAt)
-		}
-		return out[i].Domain < out[j].Domain
-	})
 	return out
 }

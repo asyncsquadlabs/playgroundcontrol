@@ -29,6 +29,9 @@ var (
 	ErrBrowserDomainNotFound = errors.New("browser domain not found")
 	// ErrBrowserDomainLimit reports that the blocked-domain cap was reached.
 	ErrBrowserDomainLimit = model.ErrBrowserDomainLimit
+	// ErrBrowserActivityRequiresMonitoring reports journaling without the
+	// browser monitor being enabled.
+	ErrBrowserActivityRequiresMonitoring = errors.New("browser monitoring must be enabled before activity logging")
 )
 
 // BrowserSettings returns the non-secret browser settings view. KeyConfigured
@@ -41,8 +44,10 @@ func (s *Store) BrowserSettings() model.BrowserSettings {
 	return settings
 }
 
-// SaveBrowserSettings persists browser monitoring configuration.
-func (s *Store) SaveBrowserSettings(enabled, autoBlock, aiClassification bool) (model.BrowserSettings, error) {
+// SaveBrowserSettings persists browser monitoring configuration. Changing the
+// monitoring or journaling state clears the backfill marker so a later enable
+// imports any history accumulated while the feature was off.
+func (s *Store) SaveBrowserSettings(enabled, autoBlock, aiClassification, activityLogging bool) (model.BrowserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil {
@@ -51,9 +56,21 @@ func (s *Store) SaveBrowserSettings(enabled, autoBlock, aiClassification bool) (
 	if aiClassification && !s.ai.KeyConfigured {
 		return model.BrowserSettings{}, ErrAIKeyRequired
 	}
-	if _, err := s.db.Exec(
-		`UPDATE browser_settings SET enabled = ?, auto_block = ?, ai_classification = ? WHERE id = 1`,
-		boolInt(enabled), boolInt(autoBlock), boolInt(aiClassification),
+	if activityLogging && !enabled {
+		return model.BrowserSettings{}, ErrBrowserActivityRequiresMonitoring
+	}
+	resetBackfill := enabled != s.browser.Enabled || activityLogging != s.browser.ActivityLogging
+	if resetBackfill {
+		_, err := s.db.Exec(
+			`UPDATE browser_settings SET enabled = ?, auto_block = ?, ai_classification = ?, activity_logging = ?, activity_backfill_at = NULL WHERE id = 1`,
+			boolInt(enabled), boolInt(autoBlock), boolInt(aiClassification), boolInt(activityLogging),
+		)
+		if err != nil {
+			return model.BrowserSettings{}, fmt.Errorf("save browser settings: %w", err)
+		}
+	} else if _, err := s.db.Exec(
+		`UPDATE browser_settings SET enabled = ?, auto_block = ?, ai_classification = ?, activity_logging = ? WHERE id = 1`,
+		boolInt(enabled), boolInt(autoBlock), boolInt(aiClassification), boolInt(activityLogging),
 	); err != nil {
 		return model.BrowserSettings{}, fmt.Errorf("save browser settings: %w", err)
 	}
@@ -61,6 +78,10 @@ func (s *Store) SaveBrowserSettings(enabled, autoBlock, aiClassification bool) (
 	settings.Enabled = enabled
 	settings.AutoBlock = autoBlock
 	settings.AIClassification = aiClassification
+	settings.ActivityLogging = activityLogging
+	if resetBackfill {
+		settings.ActivityBackfillAt = time.Time{}
+	}
 	settings.KeyConfigured = s.ai.KeyConfigured
 	s.browser = settings
 	if err := s.refreshBackup(); err != nil {
@@ -110,12 +131,13 @@ func (s *Store) loadBrowserSettings() error {
 	if s.db == nil {
 		return errors.New("database is not open")
 	}
-	var enabled, autoBlock, aiClassification int
-	var lastScan, lastError sql.NullString
+	var enabled, autoBlock, aiClassification, activityLogging int
+	var lastScan, lastError, backfillAt sql.NullString
 	err := s.db.QueryRow(
-		`SELECT enabled, auto_block, ai_classification, last_scan_at, last_error
+		`SELECT enabled, auto_block, ai_classification, activity_logging,
+			last_scan_at, last_error, activity_backfill_at
 		 FROM browser_settings WHERE id = 1`,
-	).Scan(&enabled, &autoBlock, &aiClassification, &lastScan, &lastError)
+	).Scan(&enabled, &autoBlock, &aiClassification, &activityLogging, &lastScan, &lastError, &backfillAt)
 	if err != nil {
 		return fmt.Errorf("load browser settings: %w", err)
 	}
@@ -123,6 +145,8 @@ func (s *Store) loadBrowserSettings() error {
 	settings.Enabled = enabled != 0
 	settings.AutoBlock = autoBlock != 0
 	settings.AIClassification = aiClassification != 0
+	settings.ActivityLogging = activityLogging != 0
+	settings.ActivityBackfillAt = parseTime(backfillAt.String)
 	settings.LastScanAt = parseTime(lastScan.String)
 	settings.LastError = truncate(strings.TrimSpace(lastError.String), maxEventLength)
 	settings.KeyConfigured = s.ai.KeyConfigured
@@ -558,10 +582,11 @@ func (s *Store) RecordBrowserAIVerdict(domain string, confidence float64, reason
 
 // RecordBrowserDetection inserts or refreshes one non-secret detection.
 func (s *Store) RecordBrowserDetection(detection model.BrowserDetection) error {
-	detection.Browser = strings.ToLower(strings.TrimSpace(detection.Browser))
-	if detection.Browser != "chrome" && detection.Browser != "edge" {
-		return errors.New("browser must be chrome or edge")
+	browser, ok := model.NormalizeBrowser(detection.Browser)
+	if !ok {
+		return errors.New("unsupported browser")
 	}
+	detection.Browser = browser
 	domain, err := domains.Normalize(detection.Domain)
 	if err != nil {
 		return err

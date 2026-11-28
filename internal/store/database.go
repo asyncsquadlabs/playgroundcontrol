@@ -106,6 +106,68 @@ var schemaV3Statements = []string{
 		ON browser_detections(time DESC, seq DESC)`,
 }
 
+var schemaV4Statements = []string{
+	`CREATE TABLE IF NOT EXISTS browser_journal_users (
+		sid TEXT PRIMARY KEY,
+		user_name TEXT NOT NULL DEFAULT '',
+		selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1)),
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS browser_activity (
+		seq INTEGER PRIMARY KEY AUTOINCREMENT,
+		time TEXT NOT NULL,
+		recorded_at TEXT NOT NULL,
+		user_sid TEXT NOT NULL DEFAULT '',
+		user_name TEXT NOT NULL DEFAULT '',
+		browser TEXT NOT NULL,
+		profile_key TEXT NOT NULL,
+		profile_label TEXT NOT NULL DEFAULT '',
+		source_key TEXT NOT NULL,
+		url TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT '',
+		domain TEXT NOT NULL,
+		search_engine TEXT NOT NULL DEFAULT '',
+		search_query TEXT NOT NULL DEFAULT '',
+		removed_at TEXT,
+		last_verified_at TEXT NOT NULL,
+		UNIQUE(profile_key, source_key)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_activity_time
+		ON browser_activity(time DESC, seq DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_activity_user_time
+		ON browser_activity(user_name, time DESC, seq DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_activity_browser_time
+		ON browser_activity(browser, time DESC, seq DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_activity_domain
+		ON browser_activity(domain)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_activity_removed
+		ON browser_activity(removed_at)`,
+	`CREATE TABLE IF NOT EXISTS browser_history_alerts (
+		id TEXT PRIMARY KEY,
+		time TEXT NOT NULL,
+		user_sid TEXT NOT NULL DEFAULT '',
+		user_name TEXT NOT NULL DEFAULT '',
+		browser TEXT NOT NULL,
+		profile_key TEXT NOT NULL DEFAULT '',
+		profile_label TEXT NOT NULL DEFAULT '',
+		removed_count INTEGER NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT '',
+		acknowledged_at TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_browser_history_alerts_time
+		ON browser_history_alerts(time DESC, id DESC)`,
+	`CREATE TABLE IF NOT EXISTS browser_history_stats (
+		profile_key TEXT PRIMARY KEY,
+		browser TEXT NOT NULL DEFAULT '',
+		user_sid TEXT NOT NULL DEFAULT '',
+		user_name TEXT NOT NULL DEFAULT '',
+		profile_label TEXT NOT NULL DEFAULT '',
+		visit_count INTEGER NOT NULL DEFAULT 0,
+		last_readable_at TEXT,
+		last_checked_at TEXT NOT NULL
+	)`,
+}
+
 var schemaV2Statements = []string{
 	`CREATE TABLE IF NOT EXISTS ai_settings (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -256,8 +318,8 @@ func migrate(db *sql.DB) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if version > 3 {
-		return fmt.Errorf("database schema version %d is newer than the supported version 3", version)
+	if version > 4 {
+		return fmt.Errorf("database schema version %d is newer than the supported version 4", version)
 	}
 
 	tx, err := db.Begin()
@@ -274,6 +336,7 @@ func migrate(db *sql.DB) error {
 	statements := append([]string(nil), schemaStatements...)
 	statements = append(statements, schemaV2Statements...)
 	statements = append(statements, schemaV3Statements...)
+	statements = append(statements, schemaV4Statements...)
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement); err != nil {
 			return fmt.Errorf("create schema: %w", err)
@@ -291,6 +354,14 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE audit_events ADD COLUMN domain TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := ensureColumn(tx, "browser_settings", "activity_logging",
+		`ALTER TABLE browser_settings ADD COLUMN activity_logging INTEGER NOT NULL DEFAULT 0 CHECK (activity_logging IN (0, 1))`); err != nil {
+		return err
+	}
+	if err := ensureColumn(tx, "browser_settings", "activity_backfill_at",
+		`ALTER TABLE browser_settings ADD COLUMN activity_backfill_at TEXT`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO app_state (id, play_allowed, last_changed_at, last_changed_by) VALUES (1, 0, NULL, '')`); err != nil {
 		return fmt.Errorf("initialize app state: %w", err)
 	}
@@ -300,7 +371,7 @@ func migrate(db *sql.DB) error {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO browser_settings (id, enabled, auto_block, ai_classification, last_scan_at, last_error, last_error_at) VALUES (1, 0, 1, 0, NULL, '', NULL)`); err != nil {
 		return fmt.Errorf("initialize browser settings: %w", err)
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
+	if _, err := tx.Exec(`PRAGMA user_version = 4`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
